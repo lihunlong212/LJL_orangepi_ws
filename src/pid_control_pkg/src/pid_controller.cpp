@@ -118,7 +118,6 @@ void PIDController::setDeadzone(double deadzone)
 */
 PositionPIDController::PositionPIDController()
 : rclcpp::Node("position_pid_controller"),
-  enable_visual_fine_tune_(true),
   pid_x_(0.8, 0.0, 0.2, 36.0, -33.0, 5.0, 0.6),
   pid_y_(0.8, 0.0, 0.2, 36.0, -33.0, 5.0, 0.6),
   pid_yaw_(1.0, 0.0, 0.2, 30.0, -30.0, 2.0, 0.5),
@@ -151,9 +150,6 @@ PositionPIDController::PositionPIDController()
   error_y_cm_(0.0),
   error_yaw_deg_(0.0),
   error_z_cm_(0.0),
-  // is_active_controller_(false),
-  // is_emergency_landing_(false),
-  // should_stop_(false),
   last_update_time_(now())
 {
   loadParameters();
