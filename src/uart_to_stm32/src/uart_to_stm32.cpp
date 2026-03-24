@@ -3,6 +3,7 @@
   
 #include <chrono>
 #include <cmath>
+#include <thread>
 #include <utility>
 
 #include <tf2/exceptions.h>
@@ -74,6 +75,9 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     active_controller_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
       "/active_controller", active_qos,
       std::bind(&UartToStm32::activeControllerCallback, this, std::placeholders::_1));
+    visual_aligned_qr_code_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
+      "/visual_aligned_qr_code", rclcpp::QoS(10),
+      std::bind(&UartToStm32::visualAlignedQrCodeCallback, this, std::placeholders::_1));
     
         // bluetooth_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
     //   "/bluetooth_data", 10,
@@ -92,7 +96,9 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       });
 
     RCLCPP_INFO(node_->get_logger(), "UartToStm32 initialized successfully");
-    RCLCPP_INFO(node_->get_logger(), "Subscribed to /velocity_map and /target_velocity topics");
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Subscribed to /velocity_map, /target_velocity, /active_controller and /visual_aligned_qr_code topics");
     return true;
 
   } catch (const std::exception & e) {
@@ -399,6 +405,30 @@ void UartToStm32::sendA2ReadyResponse()
   }
 }
 
+void UartToStm32::sendQrCodeToSerial(uint8_t qr_code)
+{
+  if (!serial_comm_ || !serial_comm_->is_open()) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 5000,
+      "Serial port is not open, cannot send QR code data");
+    return;
+  }
+
+  std::vector<uint8_t> data(1, qr_code);
+  if (serial_comm_->send_protocol_data(QR_CODE_FRAME_ID, static_cast<uint8_t>(data.size()), data)) {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Sent QR code frame: id=0x%02X code=%u",
+      static_cast<unsigned>(QR_CODE_FRAME_ID),
+      static_cast<unsigned>(qr_code));
+  } else {
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "Failed to send QR code frame: %s",
+      serial_comm_->get_last_error().c_str());
+  }
+}
+
 void UartToStm32::activeControllerCallback(const std_msgs::msg::UInt8::SharedPtr msg)
 {
   if (msg->data == 2) {
@@ -407,6 +437,20 @@ void UartToStm32::activeControllerCallback(const std_msgs::msg::UInt8::SharedPtr
       sendA2ReadyResponse();
       std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 间隔100ms发送一次
     }
+  }
+}
+
+void UartToStm32::visualAlignedQrCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+{
+  RCLCPP_INFO(
+    node_->get_logger(),
+    "Received aligned QR code %u. Sending frame 0x%02X three times.",
+    static_cast<unsigned>(msg->data),
+    static_cast<unsigned>(QR_CODE_FRAME_ID));
+
+  for (int i = 0; i < 3; ++i) {
+    sendQrCodeToSerial(msg->data);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 }
 

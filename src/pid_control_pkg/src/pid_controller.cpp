@@ -4,6 +4,9 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <algorithm>
+#include <chrono>
+
 namespace pid_control_pkg
 {
 
@@ -110,12 +113,7 @@ void PIDController::setDeadzone(double deadzone)
 {
   deadzone_ = deadzone;
 }
-/*
-  订阅/发布主题：
-    订阅 /target_position (std_msgs::msg::Float32MultiArray)：接收目标位置和朝向，包含四个浮点数 [x_cm, y_cm, z_cm, yaw_deg]。
-    订阅 /height 
-    发布 /target_velocity (std_msgs::msg::Float32MultiArray)
-*/
+
 PositionPIDController::PositionPIDController()
 : rclcpp::Node("position_pid_controller"),
   pid_x_(0.8, 0.0, 0.2, 36.0, -33.0, 5.0, 0.6),
@@ -123,6 +121,8 @@ PositionPIDController::PositionPIDController()
   pid_yaw_(1.0, 0.0, 0.2, 30.0, -30.0, 2.0, 0.5),
   pid_z_(1.0, 0.0, 0.2, 25.0, -60.0, 3.0, 0.6),
   pid_xy_speed_(0.8, 0.0, 0.2, 36.0, -36.0, 5.0, 0.6),
+  pid_visual_x_(0.08, 0.0, 0.01, 20.0, -20.0, 500.0, 5.0),
+  pid_visual_y_(0.08, 0.0, 0.01, 20.0, -20.0, 500.0, 5.0),
   target_x_cm_(0.0),
   target_y_cm_(0.0),
   target_z_cm_(0.0),
@@ -145,11 +145,24 @@ PositionPIDController::PositionPIDController()
   max_angular_vel_(30.0),
   max_vertical_vel_(30.0),
   max_slow_vel_(20.0),
+  visual_kp_x_(0.08),
+  visual_ki_x_(0.0),
+  visual_kd_x_(0.01),
+  visual_kp_y_(0.08),
+  visual_ki_y_(0.0),
+  visual_kd_y_(0.01),
+  visual_pixel_deadzone_(5.0),
+  visual_max_xy_velocity_(20.0),
+  visual_data_timeout_sec_(0.5),
   distance_xy_cm_(0.0),
   error_x_cm_(0.0),
   error_y_cm_(0.0),
   error_yaw_deg_(0.0),
   error_z_cm_(0.0),
+  visual_takeover_active_(false),
+  has_visual_fine_data_(false),
+  visual_error_x_px_(0.0),
+  visual_error_y_px_(0.0),
   last_update_time_(now())
 {
   loadParameters();
@@ -160,11 +173,17 @@ PositionPIDController::PositionPIDController()
   target_position_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
     "/target_position", rclcpp::QoS(10),
     std::bind(&PositionPIDController::targetPositionCallback, this, std::placeholders::_1));
-
-
   height_sub_ = create_subscription<std_msgs::msg::Int16>(
     "/height", rclcpp::QoS(10),
     std::bind(&PositionPIDController::heightCallback, this, std::placeholders::_1));
+
+  auto takeover_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+  visual_takeover_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/visual_takeover_active", takeover_qos,
+    std::bind(&PositionPIDController::visualTakeoverCallback, this, std::placeholders::_1));
+  fine_data_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
+    "/fine_data", rclcpp::QoS(10),
+    std::bind(&PositionPIDController::fineDataCallback, this, std::placeholders::_1));
 
   target_velocity_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>(
     "/target_velocity", rclcpp::QoS(10));
@@ -177,7 +196,6 @@ PositionPIDController::PositionPIDController()
   RCLCPP_INFO(get_logger(), "Position PID Controller initialized (%.1f Hz)", control_frequency_);
   RCLCPP_INFO(get_logger(), "Frames: map=%s, laser_link=%s", map_frame_.c_str(), laser_link_frame_.c_str());
 }
-
 
 void PositionPIDController::targetPositionCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
@@ -202,9 +220,36 @@ void PositionPIDController::heightCallback(const std_msgs::msg::Int16::SharedPtr
   current_z_cm_ = static_cast<double>(msg->data);
   has_target_height_ = true;
 }
-/*
-    获取自动获取tf数据
-*/
+
+void PositionPIDController::visualTakeoverCallback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  if (visual_takeover_active_ == msg->data) {
+    return;
+  }
+
+  visual_takeover_active_ = msg->data;
+  pid_visual_x_.reset();
+  pid_visual_y_.reset();
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Visual takeover mode changed: %s",
+    visual_takeover_active_ ? "active" : "inactive");
+}
+
+void PositionPIDController::fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg)
+{
+  if (msg->data.size() < 2) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "/fine_data requires 2 values [x_px, y_px]");
+    return;
+  }
+
+  visual_error_x_px_ = static_cast<double>(msg->data[0]);
+  visual_error_y_px_ = static_cast<double>(msg->data[1]);
+  has_visual_fine_data_ = true;
+  last_visual_data_time_ = now();
+}
+
 bool PositionPIDController::getCurrentPose()
 {
   try {
@@ -216,7 +261,9 @@ bool PositionPIDController::getCurrentPose()
 
     tf2::Quaternion q;
     tf2::fromMsg(transform.transform.rotation, q);
-    double roll, pitch, yaw;
+    double roll = 0.0;
+    double pitch = 0.0;
+    double yaw = 0.0;
     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
     current_yaw_deg_ = radToDeg(yaw);
 
@@ -228,6 +275,14 @@ bool PositionPIDController::getCurrentPose()
       map_frame_.c_str(), laser_link_frame_.c_str(), ex.what());
     return false;
   }
+}
+
+bool PositionPIDController::hasFreshVisualData(const rclcpp::Time & now_time) const
+{
+  if (!has_visual_fine_data_ || last_visual_data_time_.nanoseconds() == 0) {
+    return false;
+  }
+  return (now_time - last_visual_data_time_).seconds() <= visual_data_timeout_sec_;
 }
 
 double PositionPIDController::normalizeAngleDeg(double angle_deg) const
@@ -291,46 +346,61 @@ std_msgs::msg::Float32MultiArray PositionPIDController::processPID(double dt)
   double vel_x_cm = 0.0;
   double vel_y_cm = 0.0;
 
-  switch (control_mode_) {
-    case ControlMode::NORMAL:
-    case ControlMode::SLOW:
-    {
-      if (distance_xy_cm_ > 0.1) {
-        double speed_cmd = -pid_xy_speed_.calculate(0.0, distance_xy_cm_, dt);
-        if (speed_cmd < 0.0) {
-          speed_cmd = 0.0;
-        }
-        const double cos_theta = error_x_cm_ / distance_xy_cm_;
-        const double sin_theta = error_y_cm_ / distance_xy_cm_;
-        vel_x_cm = speed_cmd * cos_theta;
-        vel_y_cm = speed_cmd * sin_theta;
-      } else {
-        vel_x_cm = 0.0;
-        vel_y_cm = 0.0;
-      }
-      break;
+  if (visual_takeover_active_) {
+    const rclcpp::Time now_time = now();
+    if (hasFreshVisualData(now_time)) {
+      vel_x_cm = pid_visual_x_.calculate(0.0, -visual_error_x_px_, dt);
+      vel_y_cm = pid_visual_y_.calculate(0.0, -visual_error_y_px_, dt);
+    } else {
+      vel_x_cm = 0.0;
+      vel_y_cm = 0.0;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Visual takeover active but /fine_data is stale. Holding XY velocity at zero.");
     }
-    case ControlMode::LOCK_Y:
-      vel_y_cm = pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
-      vel_x_cm = 0.4 * pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
-      break;
-    case ControlMode::LOCK_X:
-      vel_x_cm = pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
-      vel_y_cm = 0.4 * pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
-      break;
-    case ControlMode::HOVER:
-      vel_x_cm = pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
-      vel_y_cm = pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
-      break;
+  } else {
+    switch (control_mode_) {
+      case ControlMode::NORMAL:
+      case ControlMode::SLOW:
+      {
+        if (distance_xy_cm_ > 0.1) {
+          double speed_cmd = -pid_xy_speed_.calculate(0.0, distance_xy_cm_, dt);
+          if (speed_cmd < 0.0) {
+            speed_cmd = 0.0;
+          }
+          const double cos_theta = error_x_cm_ / distance_xy_cm_;
+          const double sin_theta = error_y_cm_ / distance_xy_cm_;
+          vel_x_cm = speed_cmd * cos_theta;
+          vel_y_cm = speed_cmd * sin_theta;
+        } else {
+          vel_x_cm = 0.0;
+          vel_y_cm = 0.0;
+        }
+        break;
+      }
+      case ControlMode::LOCK_Y:
+        vel_y_cm = pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
+        vel_x_cm = 0.4 * pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
+        break;
+      case ControlMode::LOCK_X:
+        vel_x_cm = pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
+        vel_y_cm = 0.4 * pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
+        break;
+      case ControlMode::HOVER:
+        vel_x_cm = pid_x_.calculate(target_x_cm_, current_x_cm_, dt);
+        vel_y_cm = pid_y_.calculate(target_y_cm_, current_y_cm_, dt);
+        break;
+    }
   }
 
   const double vel_yaw_deg = pid_yaw_.calculate(0.0, -error_yaw_deg_, dt);
-  
+
   double vel_z_cm = 0.0;
   if (has_target_height_) {
     vel_z_cm = pid_z_.calculate(target_z_cm_, current_z_cm_, dt);
   } else {
-    // 如果有目标高度但没有高度反馈，打印警告
     if (std::fabs(target_z_cm_) > 1.0) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
         "Waiting for height data... Z velocity suppressed (Target Z=%.1f)", target_z_cm_);
@@ -363,22 +433,25 @@ void PositionPIDController::controlTimerCallback()
   last_update_time_ = now_time;
 
   auto cmd_vel = processPID(dt);
-  
-  
   target_velocity_pub_->publish(cmd_vel);
-  
 
-  if (isTargetReached()) {
+  if (!visual_takeover_active_ && isTargetReached()) {
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
       "Target reached: distance=%.1fcm yaw_error=%.1fdeg",
       distance_xy_cm_, error_yaw_deg_);
   }
 
-  RCLCPP_DEBUG(get_logger(),
-    "Current[%.1f, %.1f, %.1fdeg] Target[%.1f, %.1f, %.1fdeg] Error[%.1f, %.1f, %.1fdeg]",
-    current_x_cm_, current_y_cm_, current_yaw_deg_,
-    target_x_cm_, target_y_cm_, target_yaw_deg_,
-    error_x_cm_, error_y_cm_, error_yaw_deg_);
+  if (visual_takeover_active_) {
+    RCLCPP_DEBUG(
+      get_logger(),
+      "Visual mode: fine_data=(%.1f, %.1f) target_velocity=(%.1f, %.1f, %.1f, %.1f)",
+      visual_error_x_px_,
+      visual_error_y_px_,
+      cmd_vel.data[0],
+      cmd_vel.data[1],
+      cmd_vel.data[2],
+      cmd_vel.data[3]);
+  }
 }
 
 void PositionPIDController::loadParameters()
@@ -407,6 +480,16 @@ void PositionPIDController::loadParameters()
   max_vertical_vel_ = declare_parameter<double>("max_vertical_velocity", 30.0);
   max_slow_vel_ = declare_parameter<double>("max_slow_velocity", 20.0);
 
+  visual_kp_x_ = declare_parameter<double>("visual_kp_x", 0.08);
+  visual_ki_x_ = declare_parameter<double>("visual_ki_x", 0.0);
+  visual_kd_x_ = declare_parameter<double>("visual_kd_x", 0.01);
+  visual_kp_y_ = declare_parameter<double>("visual_kp_y", 0.08);
+  visual_ki_y_ = declare_parameter<double>("visual_ki_y", 0.0);
+  visual_kd_y_ = declare_parameter<double>("visual_kd_y", 0.01);
+  visual_pixel_deadzone_ = declare_parameter<double>("visual_pixel_deadzone", 5.0);
+  visual_max_xy_velocity_ = declare_parameter<double>("visual_max_xy_velocity", 20.0);
+  visual_data_timeout_sec_ = declare_parameter<double>("visual_data_timeout_sec", 0.5);
+
   pid_x_.setPID(kp_xy, ki_xy, kd_xy);
   pid_y_.setPID(kp_xy, ki_xy, kd_xy);
   pid_yaw_.setPID(kp_yaw, ki_yaw, kd_yaw);
@@ -419,9 +502,21 @@ void PositionPIDController::loadParameters()
   pid_z_.setOutputLimits(max_vertical_vel_, -60.0);
   pid_xy_speed_.setOutputLimits(max_linear_vel_, -max_linear_vel_);
 
+  pid_visual_x_.setPID(visual_kp_x_, visual_ki_x_, visual_kd_x_);
+  pid_visual_y_.setPID(visual_kp_y_, visual_ki_y_, visual_kd_y_);
+  pid_visual_x_.setOutputLimits(visual_max_xy_velocity_, -visual_max_xy_velocity_);
+  pid_visual_y_.setOutputLimits(visual_max_xy_velocity_, -visual_max_xy_velocity_);
+  pid_visual_x_.setDeadzone(visual_pixel_deadzone_);
+  pid_visual_y_.setDeadzone(visual_pixel_deadzone_);
+
   RCLCPP_INFO(get_logger(),
     "PID params: XY(kp=%.2f, ki=%.2f, kd=%.2f) Yaw(kp=%.2f, ki=%.2f, kd=%.2f) Z(kp=%.2f, ki=%.2f, kd=%.2f)",
     kp_xy, ki_xy, kd_xy, kp_yaw, ki_yaw, kd_yaw, kp_z, ki_z, kd_z);
+  RCLCPP_INFO(get_logger(),
+    "Visual PID params: X(kp=%.3f, ki=%.3f, kd=%.3f) Y(kp=%.3f, ki=%.3f, kd=%.3f) deadzone=%.1f max_vel=%.1f stale=%.1fs",
+    visual_kp_x_, visual_ki_x_, visual_kd_x_,
+    visual_kp_y_, visual_ki_y_, visual_kd_y_,
+    visual_pixel_deadzone_, visual_max_xy_velocity_, visual_data_timeout_sec_);
   RCLCPP_INFO(get_logger(),
     "Tolerances: pos=%.1fcm yaw=%.1fdeg height=%.1fcm",
     position_tolerance_, yaw_tolerance_, height_tolerance_);

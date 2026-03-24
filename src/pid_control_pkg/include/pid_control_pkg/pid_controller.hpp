@@ -6,8 +6,10 @@
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
+#include <std_msgs/msg/int32_multi_array.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
@@ -72,9 +74,12 @@ public:
 private:
   void targetPositionCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void heightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void visualTakeoverCallback(const std_msgs::msg::Bool::SharedPtr msg);
+  void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
   void controlTimerCallback();
 
   bool getCurrentPose();
+  bool hasFreshVisualData(const rclcpp::Time & now_time) const;
   void loadParameters();
   void calculateErrors();
   double normalizeAngleDeg(double angle_deg) const;
@@ -87,6 +92,8 @@ private:
 
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr target_position_sub_;
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr visual_takeover_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr target_velocity_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
@@ -98,6 +105,8 @@ private:
   PIDController pid_yaw_;
   PIDController pid_z_;
   PIDController pid_xy_speed_;
+  PIDController pid_visual_x_;
+  PIDController pid_visual_y_;
 
   double target_x_cm_;
   double target_y_cm_;
@@ -126,11 +135,27 @@ private:
   double max_vertical_vel_;
   double max_slow_vel_;
 
+  double visual_kp_x_;
+  double visual_ki_x_;
+  double visual_kd_x_;
+  double visual_kp_y_;
+  double visual_ki_y_;
+  double visual_kd_y_;
+  double visual_pixel_deadzone_;
+  double visual_max_xy_velocity_;
+  double visual_data_timeout_sec_;
+
   double distance_xy_cm_;
   double error_x_cm_;
   double error_y_cm_;
   double error_yaw_deg_;
   double error_z_cm_;
+
+  bool visual_takeover_active_;
+  bool has_visual_fine_data_;
+  double visual_error_x_px_;
+  double visual_error_y_px_;
+  rclcpp::Time last_visual_data_time_;
 
   rclcpp::Time last_update_time_;
 };

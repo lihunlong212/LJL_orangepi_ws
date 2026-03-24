@@ -18,5 +18,19 @@ def generate_launch_description():
             executable="route_test_node",
             name="route_test_node",
             output="screen",
+            parameters=[
+                {
+                    "map_frame": "map",
+                    "laser_link_frame": "laser_link",
+                    "output_topic": "/target_position",
+                    "position_tolerance_cm": 6.0,
+                    "yaw_tolerance_deg": 5.0,
+                    "height_tolerance_cm": 6.0,
+                    "visual_align_pixel_threshold": 100.0,
+                    "visual_align_required_frames": 3,
+                    "visual_takeover_timeout_sec": 5.0,
+                    "fine_data_stale_timeout_sec": 0.5,
+                }
+            ],
         )
     ])

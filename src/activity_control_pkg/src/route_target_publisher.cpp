@@ -26,7 +26,18 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
 : rclcpp::Node("route_target_publisher", options),
   current_idx_(std::numeric_limits<std::size_t>::max()),
   has_height_(false),
-  current_height_cm_(0.0)
+  current_height_cm_(0.0),
+  visual_align_pixel_threshold_(0.0),
+  visual_align_required_frames_(0),
+  visual_takeover_timeout_sec_(0.0),
+  fine_data_stale_timeout_sec_(0.0),
+  visual_takeover_active_(false),
+  has_fine_data_(false),
+  fine_error_x_px_(0),
+  fine_error_y_px_(0),
+  has_apriltag_code_(false),
+  latest_apriltag_code_(-1),
+  aligned_frame_count_(0)
 {
   pos_tol_cm_ = declare_parameter("position_tolerance_cm", 9.0);
   yaw_tol_deg_ = declare_parameter("yaw_tolerance_deg", 5.0);
@@ -34,22 +45,40 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   map_frame_ = declare_parameter("map_frame", "map");
   laser_link_frame_ = declare_parameter("laser_link_frame", "laser_link");
   output_topic_ = declare_parameter("output_topic", "/target_position");
+  visual_align_pixel_threshold_ = declare_parameter("visual_align_pixel_threshold", 100.0);
+  visual_align_required_frames_ = declare_parameter("visual_align_required_frames", 3);
+  visual_takeover_timeout_sec_ = declare_parameter("visual_takeover_timeout_sec", 5.0);
+  fine_data_stale_timeout_sec_ = declare_parameter("fine_data_stale_timeout_sec", 0.5);
 
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
-  target_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>(output_topic_, qos);
-  active_controller_pub_ = create_publisher<std_msgs::msg::UInt8>("/active_controller", qos);
+  auto durable_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+  target_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>(output_topic_, durable_qos);
+  active_controller_pub_ = create_publisher<std_msgs::msg::UInt8>("/active_controller", durable_qos);
+  visual_takeover_active_pub_ =
+    create_publisher<std_msgs::msg::Bool>("/visual_takeover_active", durable_qos);
+  visual_aligned_qr_code_pub_ =
+    create_publisher<std_msgs::msg::UInt8>("/visual_aligned_qr_code", rclcpp::QoS(10).reliable());
 
   height_sub_ = create_subscription<std_msgs::msg::Int16>(
     "/height",
     rclcpp::QoS(10),
     std::bind(&RouteTargetPublisherNode::heightCallback, this, std::placeholders::_1));
+  fine_data_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
+    "/fine_data",
+    rclcpp::QoS(10),
+    std::bind(&RouteTargetPublisherNode::fineDataCallback, this, std::placeholders::_1));
+  apriltag_code_sub_ = create_subscription<std_msgs::msg::Int32>(
+    "/apriltag_code",
+    rclcpp::QoS(10),
+    std::bind(&RouteTargetPublisherNode::aprilTagCodeCallback, this, std::placeholders::_1));
 
   monitor_timer_ = create_wall_timer(
     std::chrono::duration<double>(kDefaultTimerPeriodSec),
     std::bind(&RouteTargetPublisherNode::monitorTimerCallback, this));
+
+  publishVisualTakeoverState(false);
 
   RCLCPP_INFO(
     get_logger(),
@@ -63,6 +92,13 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
     pos_tol_cm_,
     yaw_tol_deg_,
     height_tol_cm_);
+  RCLCPP_INFO(
+    get_logger(),
+    "Visual takeover: threshold=%.1fpx frames=%d timeout=%.1fs stale=%.1fs",
+    visual_align_pixel_threshold_,
+    visual_align_required_frames_,
+    visual_takeover_timeout_sec_,
+    fine_data_stale_timeout_sec_);
 }
 
 void RouteTargetPublisherNode::addTarget(const Target & target)
@@ -111,11 +147,12 @@ void RouteTargetPublisherNode::publishTarget(const Target & target, bool init_fl
 
   RCLCPP_INFO(
     get_logger(),
-    "Published target: x=%.1fcm y=%.1fcm z=%.1fcm yaw=%.1fdeg%s",
+    "Published target: x=%.1fcm y=%.1fcm z=%.1fcm yaw=%.1fdeg takeover=%s%s",
     target.x_cm,
     target.y_cm,
     target.z_cm,
     target.yaw_deg,
+    target.is_takeover ? "true" : "false",
     init_flag ? " (first)" : "");
 }
 
@@ -123,6 +160,26 @@ void RouteTargetPublisherNode::heightCallback(const std_msgs::msg::Int16::Shared
 {
   current_height_cm_ = static_cast<double>(msg->data);
   has_height_ = true;
+}
+
+void RouteTargetPublisherNode::fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg)
+{
+  if (msg->data.size() < 2) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "/fine_data requires 2 values [x_px, y_px]");
+    return;
+  }
+
+  fine_error_x_px_ = msg->data[0];
+  fine_error_y_px_ = msg->data[1];
+  has_fine_data_ = true;
+  last_fine_data_time_ = now();
+}
+
+void RouteTargetPublisherNode::aprilTagCodeCallback(const std_msgs::msg::Int32::SharedPtr msg)
+{
+  latest_apriltag_code_ = msg->data;
+  has_apriltag_code_ = true;
+  last_apriltag_code_time_ = now();
 }
 
 bool RouteTargetPublisherNode::getCurrentPose(
@@ -186,6 +243,59 @@ bool RouteTargetPublisherNode::isReached(
   return z_ok && xy_ok && yaw_ok;
 }
 
+bool RouteTargetPublisherNode::hasFreshFineData(const rclcpp::Time & now_time) const
+{
+  if (!has_fine_data_ || last_fine_data_time_.nanoseconds() == 0) {
+    return false;
+  }
+  return (now_time - last_fine_data_time_).seconds() <= fine_data_stale_timeout_sec_;
+}
+
+bool RouteTargetPublisherNode::hasFreshAprilTagCode(const rclcpp::Time & now_time) const
+{
+  if (!has_apriltag_code_ || last_apriltag_code_time_.nanoseconds() == 0) {
+    return false;
+  }
+  return (now_time - last_apriltag_code_time_).seconds() <= fine_data_stale_timeout_sec_;
+}
+
+void RouteTargetPublisherNode::enterVisualTakeover()
+{
+  visual_takeover_active_ = true;
+  aligned_frame_count_ = 0;
+  visual_takeover_start_time_ = now();
+  publishVisualTakeoverState(true);
+  RCLCPP_INFO(get_logger(), "Entered visual takeover for target %zu.", current_idx_);
+}
+
+void RouteTargetPublisherNode::exitVisualTakeover()
+{
+  visual_takeover_active_ = false;
+  aligned_frame_count_ = 0;
+  publishVisualTakeoverState(false);
+}
+
+void RouteTargetPublisherNode::advanceToNextTarget()
+{
+  ++current_idx_;
+  if (current_idx_ < targets_.size()) {
+    publishCurrent();
+  } else {
+    current_idx_ = targets_.size();
+    std_msgs::msg::UInt8 active_msg;
+    active_msg.data = 3;
+    active_controller_pub_->publish(active_msg);
+    RCLCPP_INFO(get_logger(), "All targets completed.");
+  }
+}
+
+void RouteTargetPublisherNode::publishVisualTakeoverState(bool active)
+{
+  std_msgs::msg::Bool msg;
+  msg.data = active;
+  visual_takeover_active_pub_->publish(msg);
+}
+
 void RouteTargetPublisherNode::monitorTimerCallback()
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -194,6 +304,9 @@ void RouteTargetPublisherNode::monitorTimerCallback()
     std_msgs::msg::UInt8 active_msg;
     active_msg.data = 3;
     active_controller_pub_->publish(active_msg);
+    if (visual_takeover_active_) {
+      exitVisualTakeover();
+    }
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
@@ -215,28 +328,96 @@ void RouteTargetPublisherNode::monitorTimerCallback()
   }
 
   const Target & target = targets_[current_idx_];
+  const rclcpp::Time now_time = now();
+
+  if (visual_takeover_active_) {
+    const double elapsed = (now_time - visual_takeover_start_time_).seconds();
+    if (elapsed > visual_takeover_timeout_sec_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Visual takeover timed out for target %zu after %.1fs. Skipping.",
+        current_idx_,
+        elapsed);
+      exitVisualTakeover();
+      advanceToNextTarget();
+      return;
+    }
+
+    if (!hasFreshFineData(now_time)) {
+      aligned_frame_count_ = 0;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Waiting for fresh /fine_data while visual takeover is active.");
+      return;
+    }
+
+    const double pixel_radius = std::hypot(
+      static_cast<double>(fine_error_x_px_),
+      static_cast<double>(fine_error_y_px_));
+
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      1000,
+      "Visual takeover target %zu: x_px=%d y_px=%d radius=%.1f threshold=%.1f frames=%d/%d",
+      current_idx_,
+      fine_error_x_px_,
+      fine_error_y_px_,
+      pixel_radius,
+      visual_align_pixel_threshold_,
+      aligned_frame_count_,
+      visual_align_required_frames_);
+
+    if (pixel_radius < visual_align_pixel_threshold_) {
+      ++aligned_frame_count_;
+      if (aligned_frame_count_ >= visual_align_required_frames_) {
+        if (hasFreshAprilTagCode(now_time) && latest_apriltag_code_ >= 0 && latest_apriltag_code_ <= 255) {
+          std_msgs::msg::UInt8 qr_msg;
+          qr_msg.data = static_cast<uint8_t>(latest_apriltag_code_);
+          visual_aligned_qr_code_pub_->publish(qr_msg);
+          RCLCPP_INFO(
+            get_logger(),
+            "Visual takeover succeeded for target %zu. Published aligned QR code %u.",
+            current_idx_,
+            static_cast<unsigned>(qr_msg.data));
+        } else {
+          RCLCPP_WARN(
+            get_logger(),
+            "Visual takeover succeeded for target %zu, but no fresh valid AprilTag code is available.",
+            current_idx_);
+        }
+
+        exitVisualTakeover();
+        advanceToNextTarget();
+      }
+    } else {
+      aligned_frame_count_ = 0;
+    }
+    return;
+  }
+
   RCLCPP_INFO_THROTTLE(
     get_logger(),
     *get_clock(),
     5000,
-    "Current target %zu: x=%.1f y=%.1f z=%.1f yaw=%.1f",
+    "Current target %zu: x=%.1f y=%.1f z=%.1f yaw=%.1f takeover=%s",
     current_idx_,
     target.x_cm,
     target.y_cm,
     target.z_cm,
-    target.yaw_deg);
+    target.yaw_deg,
+    target.is_takeover ? "true" : "false");
 
   if (isReached(target, x_cm, y_cm, z_cm, yaw_deg)) {
-    RCLCPP_INFO(get_logger(), "Target %zu reached.", current_idx_);
-    ++current_idx_;
-    if (current_idx_ < targets_.size()) {
-      publishCurrent();
-    } else {
-      current_idx_ = targets_.size();
-      std_msgs::msg::UInt8 active_msg;
-      active_msg.data = 3;
-      active_controller_pub_->publish(active_msg);
+    if (target.is_takeover) {
+      enterVisualTakeover();
+      return;
     }
+
+    RCLCPP_INFO(get_logger(), "Target %zu reached.", current_idx_);
+    advanceToNextTarget();
   }
 }
 
@@ -273,7 +454,7 @@ RouteTestNode::RouteTestNode(
 
   RCLCPP_INFO(get_logger(), "Route test node started. Adding the first target.");
 
-  const Target first{0.0, 0.0, 130.0, 0.0};
+  const Target first{0.0, 0.0, 130.0, 0.0, false};
   route_node_->addTarget(first);
 
   const auto current = route_node_->currentIndex();
@@ -299,25 +480,25 @@ void RouteTestNode::addTimerCallback()
   Target target{};
   switch (next_target_index_) {
     case 1:
-      target = Target{100.0, 0.0, 130.0, 0.0};
+      target = Target{100.0, 0.0, 130.0, 0.0, false};
       break;
     case 2:
-      target = Target{100.0, 50.0, 130.0, 0.0};
+      target = Target{100.0, 50.0, 130.0, 0.0, false};
       break;
     case 3:
-      target = Target{100.0, 50.0, 40.0, 0.0};
+      target = Target{100.0, 50.0, 40.0, 0.0, false};
       break;
     case 4:
-      target = Target{100.0, 50.0, 130.0, 0.0};
+      target = Target{100.0, 50.0, 130.0, 0.0, false};
       break;
     case 5:
-      target = Target{100.0, 0.0, 130.0, 0.0};
+      target = Target{100.0, 0.0, 130.0, 0.0, false};
       break;
     case 6:
-      target = Target{0.0, 0.0, 130.0, 0.0};
+      target = Target{0.0, 0.0, 130.0, 0.0, false};
       break;
     case 7:
-      target = Target{0.0, 0.0, 0.0, 0.0};
+      target = Target{0.0, 0.0, 0.0, 0.0, false};
       break;
     default:
       add_timer_->cancel();
@@ -329,12 +510,13 @@ void RouteTestNode::addTimerCallback()
   const auto current = route_node_->currentIndex();
   RCLCPP_INFO(
     get_logger(),
-    "Queued target idx=%d: x=%.1f y=%.1f z=%.1f yaw=%.1f | current=%zu",
+    "Queued target idx=%d: x=%.1f y=%.1f z=%.1f yaw=%.1f takeover=%s | current=%zu",
     next_target_index_,
     target.x_cm,
     target.y_cm,
     target.z_cm,
     target.yaw_deg,
+    target.is_takeover ? "true" : "false",
     (current == std::numeric_limits<std::size_t>::max() ? 0 : current + 1));
 
   ++next_target_index_;

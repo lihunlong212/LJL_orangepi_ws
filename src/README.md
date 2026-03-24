@@ -1,10 +1,10 @@
-# ROS 2 工作空间 `src/` 目录说明
+# ROS 2 Workspace `src/` Overview
 
-这是当前工作空间 `src/` 目录的简要说明，重点描述仓库里现在仍然存在、并且实际接入主链路的功能包。
+This workspace currently keeps the UAV control path: mapping/localization, waypoint publishing, aircraft PID, the STM32 serial bridge, and `drone_camera_pkg`.
 
-## 快速开始
+## Quick Start
 
-在工作空间根目录执行：
+Run from the workspace root:
 
 ```bash
 colcon build --symlink-install
@@ -14,117 +14,98 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-## 当前主链路数据流
+## Main Data Flow
 
-- 雷达数据：`bluesea2` 发布 `/scan`。
-- 任务目标：`activity_control_pkg` 发布 `/target_position`，并通过 `/active_controller` 指定当前由飞控执行。
-- 速度生成：`pid_control_pkg` 订阅 `/target_position`，发布 `/target_velocity`。
-- 串口桥接：`uart_to_stm32` 与 STM32/飞控交互，并发布 `/height`、`/is_st_ready`、`/mission_step`。
-- 相机节点：`drone_camera_pkg` 订阅 `/height`，发布 `/fine_data` 与 `/apriltag_code`，并在下降越过阈值时保存照片。
+- `bluesea2` publishes `/scan`
+- `activity_control_pkg` publishes `/target_position` and `/active_controller`
+- `drone_camera_pkg` publishes `/fine_data` and `/apriltag_code`
+- `activity_control_pkg` enters visual takeover for selected waypoints and publishes `/visual_takeover_active`
+- `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
+- `activity_control_pkg` publishes `/visual_aligned_qr_code` after visual alignment succeeds
+- `uart_to_stm32` forwards `/target_velocity` to the flight controller and sends `/visual_aligned_qr_code` as serial frame `0x11`
+- `uart_to_stm32` also publishes `/height`, `/is_st_ready`, and `/mission_step`
 
-## 功能包说明
+## Packages
 
-## `activity_control_pkg`（路线目标发布）
+### `activity_control_pkg`
 
-用途概述：管理一串目标点，根据当前位置与高度判断是否到达，并按顺序推进后续目标。
+Maintains the waypoint queue, checks whether the current target is reached, and triggers visual takeover when `Target.is_takeover` is `true`.
 
-关键文件：
+Key files:
 
-- `activity_control_pkg/include/activity_control_pkg/route_target_publisher.hpp`：定义 `Target` 结构体，以及目标发布节点和测试节点的接口。
-- `activity_control_pkg/src/route_target_publisher.cpp`：维护目标点队列 `targets_`，通过 TF 查询 `map -> laser_link` 获取当前位姿（高度来自 `/height`），发布 `/target_position` 与 `/active_controller`，并在达到当前目标后切换到下一个目标。
-- `activity_control_pkg/src/route_target_publisher_main.cpp`：`route_target_publisher_node` 的标准入口。
-- `activity_control_pkg/src/route_test_node.cpp`：测试入口，使用 `MultiThreadedExecutor` 同时运行目标发布节点与测试节点，并自动添加一组预设目标点。
+- `activity_control_pkg/include/activity_control_pkg/route_target_publisher.hpp`
+- `activity_control_pkg/src/route_target_publisher.cpp`
+- `activity_control_pkg/src/route_target_publisher_main.cpp`
+- `activity_control_pkg/src/route_test_node.cpp`
 
-Launch：
+Visual takeover topics:
 
-- `activity_control_pkg/launch/route_target_publisher.launch.py`
-- `activity_control_pkg/launch/route_test.launch.py`
+- `/visual_takeover_active`
+- `/visual_aligned_qr_code`
 
----
+### `drone_camera_pkg`
 
-## `bluesea2` / `base_lidar`（蓝海雷达驱动）
+Runs camera preview, detects AprilTags, and publishes:
 
-用途概述：对接蓝海雷达 SDK，发布 `LaserScan`（以及可选点云），并提供电机控制服务接口。
+- `/fine_data`: pixel error `[x_px, y_px]`
+- `/apriltag_code`: current tag code
 
-常用启动文件位于 `bluesea2/src/bluesea-ros2/launch/`，包括 `uart_lidar.launch`、`udp_lidar.launch` 等。
+### `my_carto_pkg`
 
----
+Launches lidar, URDF, Cartographer, and RViz together.
 
-## `drone_camera_pkg`（相机预览、AprilTag 检测与阈值拍照）
+Key file:
 
-用途概述：打开相机做实时预览，检测 AprilTag 并发布简化结果，同时根据高度阈值在下降过程中抓拍一张照片。
+- `my_carto_pkg/launch/fly_carto.launch.py`
 
-关键文件：
+### `my_launch`
 
-- `drone_camera_pkg/src/drone_camera_node.cpp`：核心节点，订阅 `/height`，发布 `/fine_data` 与 `/apriltag_code`，并在高度从阈值上方下降穿越阈值时触发一次抓拍保存。
+Launches the complete demo flow.
 
-通常通过 `my_launch/launch/demo1.launch.py` 一起启动。
+Key file:
 
----
+- `my_launch/launch/demo1.launch.py`
 
-## `my_carto_pkg`（建图/定位组合启动）
+### `pid_control_pkg`
 
-用途概述：把雷达、URDF、Cartographer 组织成一个启动序列。
+The only PID package left in the workspace. It converts target position and current pose into `/target_velocity`.
 
-关键文件：
+Control behavior:
 
-- `my_carto_pkg/launch/fly_carto.launch.py`：组合 launch，先启动雷达，再启动 `robot_state_publisher`、Cartographer 和 RViz。
+- Normal mode: XY / Z / Yaw use waypoint PID
+- Visual takeover mode: XY uses visual PID from `/fine_data`, while Z / Yaw keep using the original PID
 
----
+Key files:
 
-## `my_launch`（总控 launch）
+- `pid_control_pkg/include/pid_control_pkg/pid_controller.hpp`
+- `pid_control_pkg/src/pid_controller.cpp`
+- `pid_control_pkg/launch/position_pid_controller.launch.py`
 
-用途概述：把建图、串口桥、位置 PID、路线测试和相机节点拼成一套演示流程。
+### `serial_comm`
 
-关键文件：
+Reusable serial communication library used by `uart_to_stm32`.
 
-- `my_launch/launch/demo1.launch.py`：启动 `fly_carto`、`uart_to_stm32`、`position_pid_controller`、`route_test_node` 和 `drone_camera_node`。
+### `uart_to_stm32`
 
----
+Bridges ROS topics and the STM32/flight-controller serial protocol.
 
-## `pid_control_pkg`（位置 PID -> 速度指令）
+Key files:
 
-用途概述：把“目标位置 + 当前位姿/高度”转换为 `/target_velocity` 速度指令。
+- `uart_to_stm32/src/uart_to_stm32_node.cpp`
+- `uart_to_stm32/src/uart_to_stm32.cpp`
+- `uart_to_stm32/launch/uart_to_stm32.launch.py`
 
-关键文件：
+Current serial frame usage:
 
-- `pid_control_pkg/include/pid_control_pkg/pid_controller.hpp`：定义 PID 控制器与位置控制节点的结构和参数。
-- `pid_control_pkg/src/pid_controller.cpp`：订阅 `/target_position`，通过 TF 和 `/height` 计算误差后发布 `/target_velocity`。
-- `pid_control_pkg/launch/position_pid_controller.launch.py`：标准启动入口。
+- `0x31`: target velocity
+- `0x32`: velocity/pose related data
+- `0xA2`: ready response
+- `0x11`: aligned QR code, payload length `1`, sent `3` times
 
----
-
-## `pid_controller`（车体 PID）
-
-用途概述：面向车体底盘的 PID 与轮速计算。当前仍保留在仓库中，但不在 `demo1` 主链路里。
-
----
-
-## `serial_comm`（串口通信基础库）
-
-用途概述：可复用的 C++ 串口通信库，提供同步/异步读写、超时处理与简单协议帧解析能力。
-
----
-
-## `uart_to_stm32`（STM32/飞控协议桥）
-
-用途概述：把 ROS 侧速度与状态转换为下位机串口协议，同时把下位机状态转换回 ROS 话题。
-
-关键文件：
-
-- `uart_to_stm32/src/uart_to_stm32_node.cpp`：节点入口。
-- `uart_to_stm32/src/uart_to_stm32.cpp`：桥接主逻辑，发布 `/height`、`/mission_step` 等话题，并下发速度指令。
-- `uart_to_stm32/launch/uart_to_stm32.launch.py`：标准启动入口。
-
-## 常用启动命令
+## Common Launch Commands
 
 ```bash
-# 位置 PID 控制
 ros2 launch pid_control_pkg position_pid_controller.launch.py
-
-# 串口桥（高度/任务状态/速度下发）
 ros2 launch uart_to_stm32 uart_to_stm32.launch.py
-
-# 组合演示
 ros2 launch my_launch demo1.launch.py
 ```
