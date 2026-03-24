@@ -35,7 +35,7 @@ public:
     camera_device_(declare_parameter<std::string>("camera_device", "/dev/video0")),
     frame_width_(declare_parameter<int>("frame_width", 640)),
     frame_height_(declare_parameter<int>("frame_height", 480)),
-    fps_(declare_parameter<double>("fps", 30.0)),
+    fps_(declare_parameter<double>("fps", 15.0)),
     height_topic_(declare_parameter<std::string>("height_topic", "/height")),
     save_dir_(declare_parameter<std::string>("save_dir", "/home/orangepi/photos")),
     window_name_(declare_parameter<std::string>("window_name", "drone_camera_preview")),

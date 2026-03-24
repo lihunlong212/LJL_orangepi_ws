@@ -55,7 +55,7 @@ def generate_launch_description():
                 'camera_device': '/dev/video0',
                 'frame_width': 640,
                 'frame_height': 480,
-                'fps': 30.0,
+                'fps': 15.0,
                 'save_dir': '/home/orangepi/photos',
                 'window_name': 'drone_camera_preview',
             }
