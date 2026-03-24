@@ -1,0 +1,15 @@
+/home/orangepi/LJL_FLY_ws/src/drone_camera_pkg/src/drone_camera_node.cpp: In static member function ‘static double DroneCameraNode::contourAreaFromCorners(const std::vector<cv::Point_<float> >&)’:
+/home/orangepi/LJL_FLY_ws/src/drone_camera_pkg/src/drone_camera_node.cpp:129:25: error: ‘contourArea’ is not a member of ‘cv’
+  129 |     return std::abs(cv::contourArea(corners));
+      |                         ^~~~~~~~~~~
+gmake[2]: *** [CMakeFiles/drone_camera_node.dir/build.make:76：CMakeFiles/drone_camera_node.dir/src/drone_camera_node.cpp.o] 错误 1
+gmake[1]: *** [CMakeFiles/Makefile2:137：CMakeFiles/drone_camera_node.dir/all] 错误 2
+gmake: *** [Makefile:146：all] 错误 2
+---
+Failed   <<< drone_camera_pkg [8.30s, exited with code 2]
+
+Summary: 13 packages finished [8.75s]
+  1 package failed: drone_camera_pkg
+  1 package had stderr output: drone_camera_pkg
+  1 package not processed
+
