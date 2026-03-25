@@ -50,13 +50,10 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {
-                'height_topic': '/height',
-                'threshold_cm': 80,
                 'camera_device': '/dev/video0',
                 'frame_width': 640,
                 'frame_height': 480,
                 'fps': 15.0,
-                'save_dir': '/home/orangepi/photos',
                 'window_name': 'drone_camera_preview',
             }
         ]

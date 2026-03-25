@@ -45,7 +45,7 @@ Visual takeover topics:
 
 ### `drone_camera_pkg`
 
-Runs camera preview, detects AprilTags, and publishes:
+Runs camera preview and AprilTag detection only, then publishes:
 
 - `/fine_data`: pixel error `[x_px, y_px]`
 - `/apriltag_code`: current tag code

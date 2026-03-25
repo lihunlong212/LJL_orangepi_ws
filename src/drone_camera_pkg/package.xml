@@ -3,7 +3,7 @@
 <package format="3">
   <name>drone_camera_pkg</name>
   <version>0.0.0</version>
-  <description>Realtime camera preview and one-shot capture on descending height threshold crossings.</description>
+  <description>Realtime camera preview, AprilTag detection, and topic publishing.</description>
   <maintainer email="orangepi@todo.todo">orangepi</maintainer>
   <license>Apache-2.0</license>
 

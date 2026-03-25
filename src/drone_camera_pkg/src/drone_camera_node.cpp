@@ -1,60 +1,38 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <ctime>
-#include <filesystem>
 #include <functional>
-#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <numeric>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <opencv2/aruco.hpp>
-#include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
-#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/int16.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
-
-namespace fs = std::filesystem;
 
 class DroneCameraNode : public rclcpp::Node
 {
 public:
   DroneCameraNode()
   : Node("drone_camera_node"),
-    threshold_cm_(declare_parameter<int>("threshold_cm", 80)),
     camera_device_(declare_parameter<std::string>("camera_device", "/dev/video0")),
     frame_width_(declare_parameter<int>("frame_width", 640)),
     frame_height_(declare_parameter<int>("frame_height", 480)),
     fps_(declare_parameter<double>("fps", 15.0)),
-    height_topic_(declare_parameter<std::string>("height_topic", "/height")),
-    save_dir_(declare_parameter<std::string>("save_dir", "/home/orangepi/photos")),
     window_name_(declare_parameter<std::string>("window_name", "drone_camera_preview")),
     fine_data_topic_(declare_parameter<std::string>("fine_data_topic", "/fine_data")),
     apriltag_code_topic_(declare_parameter<std::string>("apriltag_code_topic", "/apriltag_code")),
     apriltag_dictionary_name_(
-      declare_parameter<std::string>("apriltag_dictionary", "DICT_APRILTAG_36h11")),
-    has_height_(false),
-    capture_armed_(false),
-    pending_capture_(false),
-    last_height_cm_(0)
+      declare_parameter<std::string>("apriltag_dictionary", "DICT_APRILTAG_36h11"))
   {
-    fs::create_directories(save_dir_);
-
-    height_sub_ = create_subscription<std_msgs::msg::Int16>(
-      height_topic_,
-      rclcpp::QoS(10),
-      std::bind(&DroneCameraNode::heightCallback, this, std::placeholders::_1));
-
     fine_data_pub_ =
       create_publisher<std_msgs::msg::Int32MultiArray>(fine_data_topic_, rclcpp::QoS(10));
     apriltag_code_pub_ =
@@ -85,10 +63,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Camera preview enabled. camera_device=%s threshold_cm=%d save_dir=%s fine_data_topic=%s apriltag_code_topic=%s apriltag_dictionary=%s",
+      "Camera preview enabled. camera_device=%s fine_data_topic=%s apriltag_code_topic=%s apriltag_dictionary=%s",
       camera_device_.c_str(),
-      threshold_cm_,
-      save_dir_.c_str(),
       fine_data_topic_.c_str(),
       apriltag_code_topic_.c_str(),
       apriltag_dictionary_name_.c_str());
@@ -128,44 +104,6 @@ private:
       return 0.0;
     }
     return std::abs(cv::contourArea(corners));
-  }
-
-  void heightCallback(const std_msgs::msg::Int16::SharedPtr msg)
-  {
-    const int current_height_cm = static_cast<int>(msg->data);
-
-    if (!has_height_) {
-      has_height_ = true;
-      last_height_cm_ = current_height_cm;
-      if (current_height_cm > threshold_cm_) {
-        capture_armed_ = true;
-        RCLCPP_INFO(get_logger(), "Capture armed after first height above %d cm.", threshold_cm_);
-      }
-      return;
-    }
-
-    if (current_height_cm > threshold_cm_ && !capture_armed_) {
-      capture_armed_ = true;
-      RCLCPP_INFO(get_logger(), "Height is above %d cm again. Capture re-armed.", threshold_cm_);
-    }
-
-    const bool descending_crossing =
-      capture_armed_ &&
-      last_height_cm_ > threshold_cm_ &&
-      current_height_cm <= threshold_cm_ &&
-      current_height_cm < last_height_cm_;
-
-    if (descending_crossing) {
-      pending_capture_ = true;
-      capture_armed_ = false;
-      RCLCPP_INFO(
-        get_logger(),
-        "Descending across threshold: %d -> %d cm. Capturing one photo.",
-        last_height_cm_,
-        current_height_cm);
-    }
-
-    last_height_cm_ = current_height_cm;
   }
 
   void detectAprilTagAndPublish(const cv::Mat & frame)
@@ -235,70 +173,21 @@ private:
     cv::waitKey(1);
 
     detectAprilTagAndPublish(frame);
-
-    if (pending_capture_) {
-      saveFrame(frame);
-      pending_capture_ = false;
-    }
   }
 
-  void saveFrame(const cv::Mat & frame)
-  {
-    const auto now = get_clock()->now();
-    const auto seconds = now.seconds();
-    const auto whole_seconds = static_cast<std::time_t>(seconds);
-    const auto millis = static_cast<int>((seconds - static_cast<double>(whole_seconds)) * 1000.0);
-
-    std::tm tm_buf{};
-#ifdef _WIN32
-    localtime_s(&tm_buf, &whole_seconds);
-#else
-    localtime_r(&whole_seconds, &tm_buf);
-#endif
-
-    std::ostringstream filename;
-    filename << "capture_"
-             << std::put_time(&tm_buf, "%Y%m%d_%H%M%S")
-             << '_'
-             << std::setw(3) << std::setfill('0') << millis
-             << ".jpg";
-
-    const fs::path output_path = fs::path(save_dir_) / filename.str();
-
-    try {
-      fs::create_directories(output_path.parent_path());
-      if (!cv::imwrite(output_path.string(), frame)) {
-        RCLCPP_ERROR(get_logger(), "Failed to save image to %s", output_path.string().c_str());
-        return;
-      }
-      RCLCPP_INFO(get_logger(), "Saved photo: %s", output_path.string().c_str());
-    } catch (const std::exception & ex) {
-      RCLCPP_ERROR(get_logger(), "Exception while saving image: %s", ex.what());
-    }
-  }
-
-  int threshold_cm_;
   std::string camera_device_;
   int frame_width_;
   int frame_height_;
   double fps_;
-  std::string height_topic_;
-  std::string save_dir_;
   std::string window_name_;
   std::string fine_data_topic_;
   std::string apriltag_code_topic_;
   std::string apriltag_dictionary_name_;
 
-  bool has_height_;
-  bool capture_armed_;
-  bool pending_capture_;
-  int last_height_cm_;
-
   std::mutex frame_mutex_;
   cv::VideoCapture camera_;
   cv::Ptr<cv::aruco::Dictionary> apriltag_dictionary_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;
-  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
   rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_pub_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr apriltag_code_pub_;
   rclcpp::TimerBase::SharedPtr frame_timer_;
