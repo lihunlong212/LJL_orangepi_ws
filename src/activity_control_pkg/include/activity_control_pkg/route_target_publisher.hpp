@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
@@ -61,7 +62,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr target_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr active_controller_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr visual_takeover_active_pub_;
-  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr visual_aligned_qr_code_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr visual_aligned_apriltag_code_pub_;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr mission_complete_pub_;
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr apriltag_code_sub_;
@@ -99,6 +101,7 @@ private:
   bool has_apriltag_code_;
   int latest_apriltag_code_;
   rclcpp::Time last_apriltag_code_time_;
+  bool mission_complete_sent_;
 
   int aligned_frame_count_;
   rclcpp::Time visual_takeover_start_time_;

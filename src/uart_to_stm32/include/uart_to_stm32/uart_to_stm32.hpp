@@ -10,6 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
 #include <std_msgs/msg/u_int8.hpp>
@@ -38,10 +39,10 @@ private:
   Eigen::Vector3d transformVelocity(const Eigen::Vector3d & linear, double yaw);
   void sendVelocityToSerial(const Eigen::Vector3d & transformed_velocity);
   void sendTargetVelocityToSerial(float vx_cm_per_s, float vy_cm_per_s, float vz_cm_per_s, float vyaw_deg_per_s);
-  void sendA2ReadyResponse();
-  void sendQrCodeToSerial(uint8_t qr_code);
-  void activeControllerCallback(const std_msgs::msg::UInt8::SharedPtr msg);
-  void visualAlignedQrCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg);
+  void sendAprilTagCodeToSerial(uint8_t apriltag_code);
+  void sendMissionCompleteToSerial();
+  void visualAlignedAprilTagCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg);
+  void missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr msg);
   void protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data);
 
   rclcpp::Node::SharedPtr node_;
@@ -55,8 +56,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr velocity_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr target_velocity_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr bluetooth_sub_;
-  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr active_controller_sub_;
-  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr visual_aligned_qr_code_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr visual_aligned_apriltag_code_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr mission_complete_sub_;
 
   std::unique_ptr<serial_comm::SerialComm> serial_comm_;
 
@@ -74,8 +75,9 @@ private:
   static constexpr uint8_t VELOCITY_FRAME_ID = 0x32;
   static constexpr uint8_t TARGET_VELOCITY_FRAME_ID = 0x31;
   static constexpr uint8_t ST_READY_QUERY_ID = 0xF1;
-  static constexpr uint8_t A2_READY_RESP_ID = 0xA2;
-  static constexpr uint8_t QR_CODE_FRAME_ID = 0x11;
+  static constexpr uint8_t APRILTAG_CODE_FRAME_ID = 0x11;
+  static constexpr uint8_t MISSION_COMPLETE_FRAME_ID = 0x66;
+  static constexpr uint8_t MISSION_COMPLETE_VALUE = 0x06;
 };
 
 }  // namespace uart_to_stm32

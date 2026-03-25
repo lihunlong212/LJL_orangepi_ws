@@ -37,6 +37,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   fine_error_y_px_(0),
   has_apriltag_code_(false),
   latest_apriltag_code_(-1),
+  mission_complete_sent_(false),
   aligned_frame_count_(0)
 {
   pos_tol_cm_ = declare_parameter("position_tolerance_cm", 9.0);
@@ -58,8 +59,10 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   active_controller_pub_ = create_publisher<std_msgs::msg::UInt8>("/active_controller", durable_qos);
   visual_takeover_active_pub_ =
     create_publisher<std_msgs::msg::Bool>("/visual_takeover_active", durable_qos);
-  visual_aligned_qr_code_pub_ =
-    create_publisher<std_msgs::msg::UInt8>("/visual_aligned_qr_code", rclcpp::QoS(10).reliable());
+  visual_aligned_apriltag_code_pub_ =
+    create_publisher<std_msgs::msg::UInt8>("/visual_aligned_apriltag_code", rclcpp::QoS(10).reliable());
+  mission_complete_pub_ =
+    create_publisher<std_msgs::msg::Empty>("/mission_complete", rclcpp::QoS(10).reliable());
 
   height_sub_ = create_subscription<std_msgs::msg::Int16>(
     "/height",
@@ -105,9 +108,12 @@ void RouteTargetPublisherNode::addTarget(const Target & target)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   const bool was_empty = targets_.empty();
+  const bool was_completed =
+    current_idx_ != std::numeric_limits<std::size_t>::max() && current_idx_ >= targets_.size();
   targets_.push_back(target);
-  if (was_empty) {
-    current_idx_ = 0;
+  if (was_empty || was_completed) {
+    mission_complete_sent_ = false;
+    current_idx_ = was_completed ? targets_.size() - 1 : 0;
     publishCurrent();
   }
 }
@@ -282,6 +288,11 @@ void RouteTargetPublisherNode::advanceToNextTarget()
     publishCurrent();
   } else {
     current_idx_ = targets_.size();
+    if (!mission_complete_sent_ && mission_complete_pub_) {
+      std_msgs::msg::Empty mission_complete_msg;
+      mission_complete_pub_->publish(mission_complete_msg);
+      mission_complete_sent_ = true;
+    }
     std_msgs::msg::UInt8 active_msg;
     active_msg.data = 3;
     active_controller_pub_->publish(active_msg);
@@ -374,14 +385,14 @@ void RouteTargetPublisherNode::monitorTimerCallback()
       ++aligned_frame_count_;
       if (aligned_frame_count_ >= visual_align_required_frames_) {
         if (hasFreshAprilTagCode(now_time) && latest_apriltag_code_ >= 0 && latest_apriltag_code_ <= 255) {
-          std_msgs::msg::UInt8 qr_msg;
-          qr_msg.data = static_cast<uint8_t>(latest_apriltag_code_);
-          visual_aligned_qr_code_pub_->publish(qr_msg);
+          std_msgs::msg::UInt8 apriltag_msg;
+          apriltag_msg.data = static_cast<uint8_t>(latest_apriltag_code_);
+          visual_aligned_apriltag_code_pub_->publish(apriltag_msg);
           RCLCPP_INFO(
             get_logger(),
-            "Visual takeover succeeded for target %zu. Published aligned QR code %u.",
+            "Visual takeover succeeded for target %zu. Published aligned AprilTag code %u.",
             current_idx_,
-            static_cast<unsigned>(qr_msg.data));
+            static_cast<unsigned>(apriltag_msg.data));
         } else {
           RCLCPP_WARN(
             get_logger(),

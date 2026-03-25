@@ -1,13 +1,13 @@
 #include "uart_to_stm32/uart_to_stm32.hpp"
 #include <iostream>
-  
+
 #include <chrono>
 #include <cmath>
 #include <thread>
 #include <utility>
 
-#include <tf2/exceptions.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/exceptions.h>
 
 namespace uart_to_stm32
 {
@@ -44,7 +44,9 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     target_frame_ = target_frame;
 
     RCLCPP_INFO(node_->get_logger(), "UartToStm32 initialized with update rate: %.1f Hz", update_rate_);
-    RCLCPP_INFO(node_->get_logger(), "Looking for transform from '%s' to '%s'", source_frame_.c_str(), target_frame_.c_str());
+    RCLCPP_INFO(
+      node_->get_logger(), "Looking for transform from '%s' to '%s'",
+      source_frame_.c_str(), target_frame_.c_str());
 
     serial_comm_ = std::make_unique<serial_comm::SerialComm>();
     if (!serial_comm_->initialize("/dev/ttyS6", 921600)) {
@@ -70,21 +72,20 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       "/target_velocity", 10,
       std::bind(&UartToStm32::targetVelocityCallback, this, std::placeholders::_1));
 
-    auto active_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+    visual_aligned_apriltag_code_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
+      "/visual_aligned_apriltag_code", rclcpp::QoS(10),
+      std::bind(&UartToStm32::visualAlignedAprilTagCodeCallback, this, std::placeholders::_1));
+    mission_complete_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+      "/mission_complete", rclcpp::QoS(10),
+      std::bind(&UartToStm32::missionCompleteCallback, this, std::placeholders::_1));
 
-    active_controller_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
-      "/active_controller", active_qos,
-      std::bind(&UartToStm32::activeControllerCallback, this, std::placeholders::_1));
-    visual_aligned_qr_code_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
-      "/visual_aligned_qr_code", rclcpp::QoS(10),
-      std::bind(&UartToStm32::visualAlignedQrCodeCallback, this, std::placeholders::_1));
-    
-        // bluetooth_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
+    // bluetooth_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
     //   "/bluetooth_data", 10,
     //   std::bind(&UartToStm32::bluetoothCallback, this, std::placeholders::_1));
 
     height_pub_ = node_->create_publisher<std_msgs::msg::Int16>("/height", 10);
-    is_st_ready_pub_ = node_->create_publisher<std_msgs::msg::UInt8>("/is_st_ready", rclcpp::QoS(10).transient_local());
+    is_st_ready_pub_ =
+      node_->create_publisher<std_msgs::msg::UInt8>("/is_st_ready", rclcpp::QoS(10).transient_local());
     mission_step_pub_ = node_->create_publisher<std_msgs::msg::UInt8>("/mission_step", 10);
 
     has_st_ready_pub_ = false;
@@ -98,7 +99,7 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     RCLCPP_INFO(node_->get_logger(), "UartToStm32 initialized successfully");
     RCLCPP_INFO(
       node_->get_logger(),
-      "Subscribed to /velocity_map, /target_velocity, /active_controller and /visual_aligned_qr_code topics");
+      "Subscribed to /velocity_map, /target_velocity, /visual_aligned_apriltag_code, and /mission_complete topics");
     return true;
 
   } catch (const std::exception & e) {
@@ -190,7 +191,7 @@ void UartToStm32::velocityCallback(const geometry_msgs::msg::Twist::SharedPtr ms
 //     } else {
 //       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
 //         "Failed to send bluetooth data: %s", serial_comm_->get_last_error().c_str());
-//     }  } 
+//     }  }
 //     else {
 //       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
 //         "Serial port is not open, cannot send bluetooth data");
@@ -272,7 +273,8 @@ void UartToStm32::targetVelocityCallback(const std_msgs::msg::Float32MultiArray:
   sendTargetVelocityToSerial(vx_cm_per_s, vy_cm_per_s, vz_cm_per_s, vyaw_deg_per_s);
 }
 
-void UartToStm32::sendTargetVelocityToSerial(float vx_cm_per_s, float vy_cm_per_s, float vz_cm_per_s, float vyaw_deg_per_s)
+void UartToStm32::sendTargetVelocityToSerial(
+  float vx_cm_per_s, float vy_cm_per_s, float vz_cm_per_s, float vyaw_deg_per_s)
 {
   if (!serial_comm_ || !serial_comm_->is_open()) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
@@ -336,7 +338,6 @@ void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & d
           is_st_ready_pub_->publish(msg);
           RCLCPP_INFO(node_->get_logger(), "Published /is_st_ready: 1 (from 0xF1 frame)");
         }
-        // sendA2ReadyResponse();
         has_st_ready_pub_ = true;
       } else {
         RCLCPP_DEBUG(node_->get_logger(), "0xF1 frame second byte != 1 (%u), ignoring", static_cast<unsigned>(second));
@@ -361,7 +362,7 @@ void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & d
       }
       break;
     }
-    case 0xB1: {  // 飞控发送的目标速度数据
+    case 0xB1: {
       if (data.size() < 8) {
         RCLCPP_WARN(node_->get_logger(),
                     "protocolDataHandler: ID 0xB1 data too short (expected 8, got %zu)", data.size());
@@ -371,9 +372,8 @@ void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & d
       int16_t vel_x = static_cast<int16_t>(data[0] | (data[1] << 8));
       int16_t vel_y = static_cast<int16_t>(data[2] | (data[3] << 8));
       int16_t vel_z = static_cast<int16_t>(data[4] | (data[5] << 8));
-      int16_t yaw   = static_cast<int16_t>(data[6] | (data[7] << 8));
+      int16_t yaw = static_cast<int16_t>(data[6] | (data[7] << 8));
 
-      // 每秒打印两次日志（500ms一次）
       RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
         "[0xB1] Target Speed -> X:%d, Y:%d, Z:%d, Yaw:%d",
         vel_x, vel_y, vel_z, yaw);
@@ -388,69 +388,78 @@ void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & d
   }
 }
 
-void UartToStm32::sendA2ReadyResponse()
-{
-  if (!serial_comm_ || !serial_comm_->is_open()) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-      "Serial port is not open, cannot send A2 ready response");
-    return;
-  }
-
-  std::vector<uint8_t> data(9, 0x00);
-  data[0] = 0x01;
-  if (serial_comm_->send_protocol_data(A2_READY_RESP_ID, static_cast<uint8_t>(data.size()), data)) {
-    RCLCPP_INFO(node_->get_logger(), "Sent A2 ready response (len=9, first=0x01)");
-  } else {
-    RCLCPP_WARN(node_->get_logger(), "Failed to send A2 ready response: %s", serial_comm_->get_last_error().c_str());
-  }
-}
-
-void UartToStm32::sendQrCodeToSerial(uint8_t qr_code)
+void UartToStm32::sendAprilTagCodeToSerial(uint8_t apriltag_code)
 {
   if (!serial_comm_ || !serial_comm_->is_open()) {
     RCLCPP_WARN_THROTTLE(
       node_->get_logger(), *node_->get_clock(), 5000,
-      "Serial port is not open, cannot send QR code data");
+      "Serial port is not open, cannot send AprilTag code data");
     return;
   }
 
-  std::vector<uint8_t> data(1, qr_code);
-  if (serial_comm_->send_protocol_data(QR_CODE_FRAME_ID, static_cast<uint8_t>(data.size()), data)) {
+  std::vector<uint8_t> data(1, apriltag_code);
+  if (serial_comm_->send_protocol_data(APRILTAG_CODE_FRAME_ID, static_cast<uint8_t>(data.size()), data)) {
     RCLCPP_INFO(
       node_->get_logger(),
-      "Sent QR code frame: id=0x%02X code=%u",
-      static_cast<unsigned>(QR_CODE_FRAME_ID),
-      static_cast<unsigned>(qr_code));
+      "Sent AprilTag code frame: id=0x%02X code=%u",
+      static_cast<unsigned>(APRILTAG_CODE_FRAME_ID),
+      static_cast<unsigned>(apriltag_code));
   } else {
     RCLCPP_WARN(
       node_->get_logger(),
-      "Failed to send QR code frame: %s",
+      "Failed to send AprilTag code frame: %s",
       serial_comm_->get_last_error().c_str());
   }
 }
 
-void UartToStm32::activeControllerCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+void UartToStm32::sendMissionCompleteToSerial()
 {
-  if (msg->data == 2) {
-    RCLCPP_INFO(node_->get_logger(), "Received active_controller = 2 (Drone Mode), sending A2 ready response 3 times.");
-    for (int i = 0; i < 3; ++i) {
-      sendA2ReadyResponse();
-      std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 间隔100ms发送一次
-    }
+  if (!serial_comm_ || !serial_comm_->is_open()) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 5000,
+      "Serial port is not open, cannot send mission complete data");
+    return;
+  }
+
+  std::vector<uint8_t> data(1, MISSION_COMPLETE_VALUE);
+  if (serial_comm_->send_protocol_data(MISSION_COMPLETE_FRAME_ID, static_cast<uint8_t>(data.size()), data)) {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Sent mission complete frame: id=0x%02X value=0x%02X",
+      static_cast<unsigned>(MISSION_COMPLETE_FRAME_ID),
+      static_cast<unsigned>(MISSION_COMPLETE_VALUE));
+  } else {
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "Failed to send mission complete frame: %s",
+      serial_comm_->get_last_error().c_str());
   }
 }
 
-void UartToStm32::visualAlignedQrCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+void UartToStm32::visualAlignedAprilTagCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg)
 {
   RCLCPP_INFO(
     node_->get_logger(),
-    "Received aligned QR code %u. Sending frame 0x%02X three times.",
+    "Received aligned AprilTag code %u. Sending frame 0x%02X three times.",
     static_cast<unsigned>(msg->data),
-    static_cast<unsigned>(QR_CODE_FRAME_ID));
+    static_cast<unsigned>(APRILTAG_CODE_FRAME_ID));
 
   for (int i = 0; i < 3; ++i) {
-    sendQrCodeToSerial(msg->data);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    sendAprilTagCodeToSerial(msg->data);
+    std::this_thread::sleep_for(100ms);
+  }
+}
+
+void UartToStm32::missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr)
+{
+  RCLCPP_INFO(
+    node_->get_logger(),
+    "Received mission complete event. Sending frame 0x%02X three times.",
+    static_cast<unsigned>(MISSION_COMPLETE_FRAME_ID));
+
+  for (int i = 0; i < 3; ++i) {
+    sendMissionCompleteToSerial();
+    std::this_thread::sleep_for(100ms);
   }
 }
 

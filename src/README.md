@@ -21,8 +21,10 @@ source install/setup.bash
 - `drone_camera_pkg` publishes `/fine_data` and `/apriltag_code`
 - `activity_control_pkg` enters visual takeover for selected waypoints and publishes `/visual_takeover_active`
 - `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
-- `activity_control_pkg` publishes `/visual_aligned_qr_code` after visual alignment succeeds
-- `uart_to_stm32` forwards `/target_velocity` to the flight controller and sends `/visual_aligned_qr_code` as serial frame `0x11`
+- `activity_control_pkg` publishes `/visual_aligned_apriltag_code` after visual alignment succeeds
+- `uart_to_stm32` forwards `/target_velocity` to the flight controller and sends `/visual_aligned_apriltag_code` as serial frame `0x11`
+- `activity_control_pkg` publishes `/mission_complete` after all targets complete
+- `uart_to_stm32` sends `/mission_complete` as serial frame `0x66` with payload `0x06`
 - `uart_to_stm32` also publishes `/height`, `/is_st_ready`, and `/mission_step`
 
 ## Packages
@@ -41,7 +43,8 @@ Key files:
 Visual takeover topics:
 
 - `/visual_takeover_active`
-- `/visual_aligned_qr_code`
+- `/visual_aligned_apriltag_code`
+- `/mission_complete`
 
 ### `drone_camera_pkg`
 
@@ -99,8 +102,8 @@ Current serial frame usage:
 
 - `0x31`: target velocity
 - `0x32`: velocity/pose related data
-- `0xA2`: ready response
-- `0x11`: aligned QR code, payload length `1`, sent `3` times
+- `0x11`: aligned AprilTag code, payload length `1`, sent `3` times
+- `0x66`: mission complete, payload `0x06`, sent `3` times
 
 ## Common Launch Commands
 
