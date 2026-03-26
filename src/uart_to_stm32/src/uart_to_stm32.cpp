@@ -311,7 +311,7 @@ void UartToStm32::sendTargetVelocityToSerial(
   }
 }
 
-void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data)
+void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data)   
 {
   switch (id) {
     case ST_READY_QUERY_ID: {
