@@ -2,6 +2,7 @@
 
 #include <angles/angles.h>
 
+#include <algorithm>
 #include <chrono>
 #include <clocale>
 #include <cmath>
@@ -29,6 +30,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   current_height_cm_(0.0),
   visual_align_pixel_threshold_(0.0),
   visual_align_required_frames_(0),
+  reach_hold_frames_(0),
   visual_takeover_timeout_sec_(0.0),
   fine_data_stale_timeout_sec_(0.0),
   visual_takeover_active_(false),
@@ -38,6 +40,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   has_apriltag_code_(false),
   latest_apriltag_code_(-1),
   mission_complete_sent_(false),
+  reach_hold_count_(0),
   aligned_frame_count_(0)
 {
   pos_tol_cm_ = declare_parameter("position_tolerance_cm", 9.0);
@@ -48,6 +51,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   output_topic_ = declare_parameter("output_topic", "/target_position");
   visual_align_pixel_threshold_ = declare_parameter("visual_align_pixel_threshold", 100.0);
   visual_align_required_frames_ = declare_parameter("visual_align_required_frames", 3);
+  reach_hold_frames_ = declare_parameter("reach_hold_frames", 3);
   visual_takeover_timeout_sec_ = declare_parameter("visual_takeover_timeout_sec", 5.0);
   fine_data_stale_timeout_sec_ = declare_parameter("fine_data_stale_timeout_sec", 0.5);
 
@@ -91,10 +95,11 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
     output_topic_.c_str());
   RCLCPP_INFO(
     get_logger(),
-    "Tolerances: position=%.1fcm yaw=%.1fdeg height=%.1fcm",
+    "Tolerances: position=%.1fcm yaw=%.1fdeg height=%.1fcm hold_frames=%d",
     pos_tol_cm_,
     yaw_tol_deg_,
-    height_tol_cm_);
+    height_tol_cm_,
+    std::max(reach_hold_frames_, 1));
   RCLCPP_INFO(
     get_logger(),
     "Visual takeover: threshold=%.1fpx frames=%d timeout=%.1fs stale=%.1fs",
@@ -144,7 +149,7 @@ void RouteTargetPublisherNode::publishTarget(const Target & target, bool init_fl
   message.data[0] = static_cast<float>(target.x_cm);
   message.data[1] = static_cast<float>(target.y_cm);
   message.data[2] = static_cast<float>(target.z_cm);
-  message.data[3] = static_cast<float>(target.yaw_deg);
+  message.data[3] = 0.0f;
   target_pub_->publish(message);
 
   std_msgs::msg::UInt8 active_msg;
@@ -153,11 +158,10 @@ void RouteTargetPublisherNode::publishTarget(const Target & target, bool init_fl
 
   RCLCPP_INFO(
     get_logger(),
-    "Published target: x=%.1fcm y=%.1fcm z=%.1fcm yaw=%.1fdeg takeover=%s%s",
+    "Published target: x=%.1fcm y=%.1fcm z=%.1fcm yaw=0.0deg takeover=%s%s",
     target.x_cm,
     target.y_cm,
     target.z_cm,
-    target.yaw_deg,
     target.is_takeover ? "true" : "false",
     init_flag ? " (first)" : "");
 }
@@ -233,18 +237,11 @@ bool RouteTargetPublisherNode::isReached(
   const double dy = target.y_cm - y_cm;
   const double dxy = std::hypot(dx, dy);
   const double dz = target.z_cm - z_cm;
-  const double dyaw = normalizeAngleDeg(target.yaw_deg - yaw_deg);
+  const double dyaw = normalizeAngleDeg(-yaw_deg);
 
   const bool z_ok = std::fabs(dz) <= height_tol_cm_;
   const bool xy_ok = dxy <= pos_tol_cm_;
   const bool yaw_ok = std::fabs(dyaw) <= yaw_tol_deg_;
-
-  if (target.z_cm > 20.0) {
-    if (current_idx_ == 0) {
-      return z_ok;
-    }
-    return z_ok && xy_ok;
-  }
 
   return z_ok && xy_ok && yaw_ok;
 }
@@ -268,6 +265,7 @@ bool RouteTargetPublisherNode::hasFreshAprilTagCode(const rclcpp::Time & now_tim
 void RouteTargetPublisherNode::enterVisualTakeover()
 {
   visual_takeover_active_ = true;
+  reach_hold_count_ = 0;
   aligned_frame_count_ = 0;
   visual_takeover_start_time_ = now();
   publishVisualTakeoverState(true);
@@ -277,12 +275,14 @@ void RouteTargetPublisherNode::enterVisualTakeover()
 void RouteTargetPublisherNode::exitVisualTakeover()
 {
   visual_takeover_active_ = false;
+  reach_hold_count_ = 0;
   aligned_frame_count_ = 0;
   publishVisualTakeoverState(false);
 }
 
 void RouteTargetPublisherNode::advanceToNextTarget()
 {
+  reach_hold_count_ = 0;
   ++current_idx_;
   if (current_idx_ < targets_.size()) {
     publishCurrent();
@@ -413,22 +413,50 @@ void RouteTargetPublisherNode::monitorTimerCallback()
     get_logger(),
     *get_clock(),
     5000,
-    "Current target %zu: x=%.1f y=%.1f z=%.1f yaw=%.1f takeover=%s",
+    "Current target %zu: x=%.1f y=%.1f z=%.1f yaw=0.0 takeover=%s",
     current_idx_,
     target.x_cm,
     target.y_cm,
     target.z_cm,
-    target.yaw_deg,
     target.is_takeover ? "true" : "false");
 
   if (isReached(target, x_cm, y_cm, z_cm, yaw_deg)) {
+    ++reach_hold_count_;
+    const int required_hold = std::max(reach_hold_frames_, 1);
+    if (reach_hold_count_ < required_hold) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        500,
+        "Target %zu within tolerance: hold=%d/%d pos=(%.1f, %.1f, %.1f)cm yaw=%.1fdeg",
+        current_idx_,
+        reach_hold_count_,
+        required_hold,
+        x_cm,
+        y_cm,
+        z_cm,
+        yaw_deg);
+      return;
+    }
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Target %zu reached: pos=(%.1f, %.1f, %.1f)cm yaw=%.1fdeg hold=%d",
+      current_idx_,
+      x_cm,
+      y_cm,
+      z_cm,
+      yaw_deg,
+      reach_hold_count_);
+
     if (target.is_takeover) {
       enterVisualTakeover();
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "Target %zu reached.", current_idx_);
     advanceToNextTarget();
+  } else if (reach_hold_count_ != 0) {
+    reach_hold_count_ = 0;
   }
 }
 
@@ -497,20 +525,9 @@ void RouteTestNode::addTimerCallback()
       target = Target{100.0, 50.0, 130.0, 0.0, false};
       break;
     case 3:
-      target = Target{100.0, 50.0, 40.0, 0.0, false};
+      target = Target{100.0, 50.0, 0.0, 0.0, false};
       break;
-    case 4:
-      target = Target{100.0, 50.0, 130.0, 0.0, false};
-      break;
-    case 5:
-      target = Target{100.0, 0.0, 130.0, 0.0, false};
-      break;
-    case 6:
-      target = Target{0.0, 0.0, 130.0, 0.0, false};
-      break;
-    case 7:
-      target = Target{0.0, 0.0, 0.0, 0.0, false};
-      break;
+ 
     default:
       add_timer_->cancel();
       RCLCPP_INFO(get_logger(), "All preset targets have been added.");

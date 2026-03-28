@@ -28,7 +28,7 @@ def generate_launch_description():
     ## ***** Launch arguments *****
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(FindPackageShare('bluesea2').find('bluesea2'), 'launch', 'uart_lidar.launch')
+            os.path.join(FindPackageShare('bluesea2').find('bluesea2'), 'launch', 'udp_lidar.launch')
         )
     )
 
@@ -106,8 +106,8 @@ def generate_launch_description():
             actions=[cartographer_node, cartographer_occupancy_grid_node]
         ),
         # Step 4: Launch rviz2
-        TimerAction(
-            period=12.0,
-            actions=[rviz_node]
-        ),
+        #TimerAction(
+         #   period=12.0,
+          #  actions=[rviz_node]
+        #),
     ])

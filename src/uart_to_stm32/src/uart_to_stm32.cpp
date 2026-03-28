@@ -49,12 +49,12 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       source_frame_.c_str(), target_frame_.c_str());
 
     serial_comm_ = std::make_unique<serial_comm::SerialComm>();
-    if (!serial_comm_->initialize("/dev/ttyS6", 115200)) {
-      RCLCPP_ERROR(node_->get_logger(), "Failed to initialize serial port /dev/ttyS6 at 115200 baudrate");
+    if (!serial_comm_->initialize("/dev/ttyS4", 921600)) {
+      RCLCPP_ERROR(node_->get_logger(), "Failed to initialize serial port /dev/ttyS4 at 921600 baudrate");
       RCLCPP_ERROR(node_->get_logger(), "Serial error: %s", serial_comm_->get_last_error().c_str());
       return false;
     }
-    RCLCPP_INFO(node_->get_logger(), "Serial port /dev/ttyS6 initialized at 115200 baudrate");
+    RCLCPP_INFO(node_->get_logger(), "Serial port /dev/ttyS4 initialized at 921600 baudrate");
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -78,10 +78,6 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     mission_complete_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
       "/mission_complete", rclcpp::QoS(10),
       std::bind(&UartToStm32::missionCompleteCallback, this, std::placeholders::_1));
-
-    // bluetooth_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
-    //   "/bluetooth_data", 10,
-    //   std::bind(&UartToStm32::bluetoothCallback, this, std::placeholders::_1));
 
     height_pub_ = node_->create_publisher<std_msgs::msg::Int16>("/height", 10);
     is_st_ready_pub_ =
@@ -177,27 +173,6 @@ void UartToStm32::velocityCallback(const geometry_msgs::msg::Twist::SharedPtr ms
   }
 }
 
-// void UartToStm32::bluetoothCallback(const std_msgs::msg::UInt8MultiArray::SharedPtr msg)
-// {
-//   if(msg->data.empty()) {
-//     RCLCPP_WARN(node_->get_logger(), "Received empty bluetooth_data message.");
-//     return;
-//   }
-//   constexpr uint8_t BLUETOOTH_FRAME_ID = 0x34;
-//   if(serial_comm_ && serial_comm_->is_open()) {
-//     if(serial_comm_->send_protocol_data(BLUETOOTH_FRAME_ID, static_cast<uint8_t>(msg->data.size()), msg->data)) {
-//       RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-//         "Sent bluetooth data %d",msg->data[0]);
-//     } else {
-//       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-//         "Failed to send bluetooth data: %s", serial_comm_->get_last_error().c_str());
-//     }  }
-//     else {
-//       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-//         "Serial port is not open, cannot send bluetooth data");
-//     }
-// }
-
 Eigen::Vector3d UartToStm32::transformVelocity(const Eigen::Vector3d & linear, double yaw)
 {
   Eigen::Matrix3d Rz;
@@ -265,6 +240,8 @@ void UartToStm32::targetVelocityCallback(const std_msgs::msg::Float32MultiArray:
   const float vz_cm_per_s = msg->data[2];
   const float vyaw_deg_per_s = msg->data[3];
 
+  // This control path assumes map +X is aligned with the aircraft forward direction at takeoff
+  // and yaw is regulated near zero, so the target velocity is forwarded without extra frame rotation.
   RCLCPP_INFO_THROTTLE(
     node_->get_logger(), *node_->get_clock(), 1000,
     "Target Velocity: linear(%.1f, %.1f, %.1f)cm/s angular(%.1f)deg/s",

@@ -56,15 +56,6 @@ private:
   double derivative_filter_alpha_;
 };
 
-enum class ControlMode
-{
-  NORMAL = 0,
-  SLOW = 1,
-  LOCK_Y = 2,
-  LOCK_X = 3,
-  HOVER = 4
-};
-
 class PositionPIDController : public rclcpp::Node
 {
 public:
@@ -83,8 +74,6 @@ private:
   void loadParameters();
   void calculateErrors();
   double normalizeAngleDeg(double angle_deg) const;
-  bool isTargetReached() const;
-  void setControlMode(ControlMode mode);
   std_msgs::msg::Float32MultiArray processPID(double dt);
 
   inline double meterToCm(double meter) const { return meter * 100.0; }
@@ -100,8 +89,6 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  PIDController pid_x_;
-  PIDController pid_y_;
   PIDController pid_yaw_;
   PIDController pid_z_;
   PIDController pid_xy_speed_;
@@ -119,21 +106,14 @@ private:
   double current_y_cm_;
   double current_yaw_deg_;
   double current_z_cm_;
-  bool has_current_pose_;
 
   double control_frequency_;
   std::string map_frame_;
   std::string laser_link_frame_;
 
-  ControlMode control_mode_;
-  double position_tolerance_;
-  double yaw_tolerance_;
-  double height_tolerance_;
-
   double max_linear_vel_;
   double max_angular_vel_;
   double max_vertical_vel_;
-  double max_slow_vel_;
 
   double visual_kp_x_;
   double visual_ki_x_;
