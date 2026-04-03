@@ -49,12 +49,12 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       source_frame_.c_str(), target_frame_.c_str());
 
     serial_comm_ = std::make_unique<serial_comm::SerialComm>();
-    if (!serial_comm_->initialize("/dev/ttyS6", 115200)) {
-      RCLCPP_ERROR(node_->get_logger(), "Failed to initialize serial port /dev/ttyS6 at 115200 baudrate");
+    if (!serial_comm_->initialize("/dev/ttyS6", 921600)) {
+      RCLCPP_ERROR(node_->get_logger(), "Failed to initialize serial port /dev/ttyS6 at 921600 baudrate");
       RCLCPP_ERROR(node_->get_logger(), "Serial error: %s", serial_comm_->get_last_error().c_str());
       return false;
     }
-    RCLCPP_INFO(node_->get_logger(), "Serial port /dev/ttyS6 initialized at 115200 baudrate");
+    RCLCPP_INFO(node_->get_logger(), "Serial port /dev/ttyS6 initialized at 921600 baudrate");
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
