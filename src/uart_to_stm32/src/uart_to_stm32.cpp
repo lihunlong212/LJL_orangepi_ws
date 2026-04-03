@@ -79,10 +79,6 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       "/mission_complete", rclcpp::QoS(10),
       std::bind(&UartToStm32::missionCompleteCallback, this, std::placeholders::_1));
 
-    // bluetooth_sub_ = node_->create_subscription<std_msgs::msg::UInt8MultiArray>(
-    //   "/bluetooth_data", 10,
-    //   std::bind(&UartToStm32::bluetoothCallback, this, std::placeholders::_1));
-
     height_pub_ = node_->create_publisher<std_msgs::msg::Int16>("/height", 10);
     is_st_ready_pub_ =
       node_->create_publisher<std_msgs::msg::UInt8>("/is_st_ready", rclcpp::QoS(10).transient_local());
@@ -176,27 +172,6 @@ void UartToStm32::velocityCallback(const geometry_msgs::msg::Twist::SharedPtr ms
     sendVelocityToSerial(transformed_vel);
   }
 }
-
-// void UartToStm32::bluetoothCallback(const std_msgs::msg::UInt8MultiArray::SharedPtr msg)
-// {
-//   if(msg->data.empty()) {
-//     RCLCPP_WARN(node_->get_logger(), "Received empty bluetooth_data message.");
-//     return;
-//   }
-//   constexpr uint8_t BLUETOOTH_FRAME_ID = 0x34;
-//   if(serial_comm_ && serial_comm_->is_open()) {
-//     if(serial_comm_->send_protocol_data(BLUETOOTH_FRAME_ID, static_cast<uint8_t>(msg->data.size()), msg->data)) {
-//       RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-//         "Sent bluetooth data %d",msg->data[0]);
-//     } else {
-//       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-//         "Failed to send bluetooth data: %s", serial_comm_->get_last_error().c_str());
-//     }  }
-//     else {
-//       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-//         "Serial port is not open, cannot send bluetooth data");
-//     }
-// }
 
 Eigen::Vector3d UartToStm32::transformVelocity(const Eigen::Vector3d & linear, double yaw)
 {
