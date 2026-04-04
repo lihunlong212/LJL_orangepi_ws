@@ -21,8 +21,10 @@ source install/setup.bash
 - `drone_camera_pkg` publishes `/fine_data` and `/apriltag_code`
 - `activity_control_pkg` enters visual takeover for selected waypoints and publishes `/visual_takeover_active`
 - `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
+- An external ROS 2 node publishes `/is_fly` as the remote-control enable signal
 - `activity_control_pkg` publishes `/visual_aligned_apriltag_code` after visual alignment succeeds
-- `uart_to_stm32` forwards `/target_velocity` to the flight controller and sends `/visual_aligned_apriltag_code` as serial frame `0x11`
+- `uart_to_stm32` listens to `/is_fly` and forwards `/target_velocity` to the flight controller only after receiving `/is_fly=true`
+- `uart_to_stm32` sends `/visual_aligned_apriltag_code` as serial frame `0x11`
 - `activity_control_pkg` publishes `/mission_complete` after all targets complete
 - `uart_to_stm32` sends `/mission_complete` as serial frame `0x66` with payload `0x06`
 - `uart_to_stm32` also publishes `/height`, `/is_st_ready`, and `/mission_step`
@@ -91,6 +93,13 @@ Reusable serial communication library used by `uart_to_stm32`.
 ### `uart_to_stm32`
 
 Bridges ROS topics and the STM32/flight-controller serial protocol.
+
+Remote-control gating:
+
+- `/is_fly` is published by an external ROS 2 node
+- `uart_to_stm32` subscribes to `/is_fly` using `std_msgs/msg/Bool`
+- after the first `/is_fly=true`, target velocity forwarding stays enabled and is not turned off again
+- before that first `true`, `/target_velocity` messages are ignored and not sent to STM32
 
 Key files:
 
