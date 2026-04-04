@@ -134,9 +134,6 @@ PositionPIDController::PositionPIDController()
   control_frequency_(50.0),
   map_frame_("map"),
   laser_link_frame_("laser_link"),
-  position_tolerance_(6.0),
-  yaw_tolerance_(5.0),
-  height_tolerance_(6.0),
   max_linear_vel_(36.0),
   max_angular_vel_(30.0),
   max_vertical_vel_(30.0),
@@ -298,14 +295,6 @@ void PositionPIDController::calculateErrors()
   }
 }
 
-bool PositionPIDController::isTargetReached() const
-{
-  return std::fabs(error_x_cm_) <= position_tolerance_ &&
-         std::fabs(error_y_cm_) <= position_tolerance_ &&
-         std::fabs(error_yaw_deg_) <= yaw_tolerance_ &&
-         (!has_target_height_ || std::fabs(error_z_cm_) <= height_tolerance_);
-}
-
 std_msgs::msg::Float32MultiArray PositionPIDController::processPID(double dt)
 {
   std_msgs::msg::Float32MultiArray cmd;
@@ -386,12 +375,6 @@ void PositionPIDController::controlTimerCallback()
   auto cmd_vel = processPID(dt);
   target_velocity_pub_->publish(cmd_vel);
 
-  if (!visual_takeover_active_ && isTargetReached()) {
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-      "Target reached: distance=%.1fcm yaw_error=%.1fdeg",
-      distance_xy_cm_, error_yaw_deg_);
-  }
-
   if (visual_takeover_active_) {
     RCLCPP_DEBUG(
       get_logger(),
@@ -410,9 +393,6 @@ void PositionPIDController::loadParameters()
   control_frequency_ = declare_parameter<double>("control_frequency", 50.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   laser_link_frame_ = declare_parameter<std::string>("laser_link_frame", "laser_link");
-  position_tolerance_ = declare_parameter<double>("position_tolerance", 6.0);
-  yaw_tolerance_ = declare_parameter<double>("yaw_tolerance", 5.0);
-  height_tolerance_ = declare_parameter<double>("height_tolerance", 6.0);
 
   const double kp_xy = declare_parameter<double>("kp_xy", 0.8);
   const double ki_xy = declare_parameter<double>("ki_xy", 0.0);
@@ -463,9 +443,6 @@ void PositionPIDController::loadParameters()
     visual_kp_x_, visual_ki_x_, visual_kd_x_,
     visual_kp_y_, visual_ki_y_, visual_kd_y_,
     visual_pixel_deadzone_, visual_max_xy_velocity_, visual_data_timeout_sec_);
-  RCLCPP_INFO(get_logger(),
-    "Tolerances: pos=%.1fcm yaw=%.1fdeg height=%.1fcm",
-    position_tolerance_, yaw_tolerance_, height_tolerance_);
   RCLCPP_INFO(get_logger(),
     "Velocity limits: linear=%.1fcm/s angular=%.1fdeg/s vertical=%.1fcm/s",
     max_linear_vel_, max_angular_vel_, max_vertical_vel_);

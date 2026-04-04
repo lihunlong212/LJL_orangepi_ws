@@ -74,7 +74,6 @@ private:
   void loadParameters();
   void calculateErrors();
   double normalizeAngleDeg(double angle_deg) const;
-  bool isTargetReached() const;
   std_msgs::msg::Float32MultiArray processPID(double dt);
 
   inline double meterToCm(double meter) const { return meter * 100.0; }
@@ -111,10 +110,6 @@ private:
   double control_frequency_;
   std::string map_frame_;
   std::string laser_link_frame_;
-
-  double position_tolerance_;
-  double yaw_tolerance_;
-  double height_tolerance_;
 
   double max_linear_vel_;
   double max_angular_vel_;

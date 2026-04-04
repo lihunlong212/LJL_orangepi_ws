@@ -427,7 +427,22 @@ void RouteTargetPublisherNode::monitorTimerCallback()
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "Target %zu reached.", current_idx_);
+    const double dx = target.x_cm - x_cm;
+    const double dy = target.y_cm - y_cm;
+    const double dz = target.z_cm - z_cm;
+    const double dyaw = normalizeAngleDeg(target.yaw_deg - yaw_deg);
+    RCLCPP_INFO(
+      get_logger(),
+      "Target %zu reached: pos_err=(%.1f, %.1f, %.1f)cm yaw_err=%.1fdeg current=(%.1f, %.1f, %.1f, %.1f)",
+      current_idx_,
+      dx,
+      dy,
+      dz,
+      dyaw,
+      x_cm,
+      y_cm,
+      z_cm,
+      yaw_deg);
     advanceToNextTarget();
   }
 }
