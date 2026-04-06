@@ -137,6 +137,8 @@ PositionPIDController::PositionPIDController()
   max_linear_vel_(36.0),
   max_angular_vel_(30.0),
   max_vertical_vel_(30.0),
+  approach_slowdown_distance_cm_(20.0),
+  approach_max_linear_velocity_(12.0),
   visual_kp_x_(0.08),
   visual_ki_x_(0.0),
   visual_kd_x_(0.01),
@@ -329,6 +331,9 @@ std_msgs::msg::Float32MultiArray PositionPIDController::processPID(double dt)
       if (speed_cmd < 0.0) {
         speed_cmd = 0.0;
       }
+      if (distance_xy_cm_ <= approach_slowdown_distance_cm_) {
+        speed_cmd = std::min(speed_cmd, approach_max_linear_velocity_);
+      }
       const double cos_theta = error_x_cm_ / distance_xy_cm_;
       const double sin_theta = error_y_cm_ / distance_xy_cm_;
       vel_x_cm = speed_cmd * cos_theta;
@@ -413,6 +418,8 @@ void PositionPIDController::loadParameters()
   max_linear_vel_ = declare_parameter<double>("max_linear_velocity", 33.0);
   max_angular_vel_ = declare_parameter<double>("max_angular_velocity", 30.0);
   max_vertical_vel_ = declare_parameter<double>("max_vertical_velocity", 30.0);
+  approach_slowdown_distance_cm_ = declare_parameter<double>("approach_slowdown_distance_cm", 20.0);
+  approach_max_linear_velocity_ = declare_parameter<double>("approach_max_linear_velocity", 12.0);
 
   visual_kp_x_ = declare_parameter<double>("visual_kp_x", 0.08);
   visual_ki_x_ = declare_parameter<double>("visual_ki_x", 0.0);
@@ -450,6 +457,9 @@ void PositionPIDController::loadParameters()
   RCLCPP_INFO(get_logger(),
     "Velocity limits: linear=%.1fcm/s angular=%.1fdeg/s vertical=%.1fcm/s",
     max_linear_vel_, max_angular_vel_, max_vertical_vel_);
+  RCLCPP_INFO(get_logger(),
+    "Approach slowdown: distance=%.1fcm max_linear=%.1fcm/s",
+    approach_slowdown_distance_cm_, approach_max_linear_velocity_);
 }
 
 }  // namespace pid_control_pkg

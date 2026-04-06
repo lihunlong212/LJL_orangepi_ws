@@ -114,6 +114,8 @@ private:
   double max_linear_vel_;
   double max_angular_vel_;
   double max_vertical_vel_;
+  double approach_slowdown_distance_cm_;
+  double approach_max_linear_velocity_;
 
   double visual_kp_x_;
   double visual_ki_x_;

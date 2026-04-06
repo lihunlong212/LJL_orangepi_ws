@@ -51,7 +51,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   output_topic_ = declare_parameter("output_topic", "/target_position");
   visual_align_pixel_threshold_ = declare_parameter("visual_align_pixel_threshold", 100.0);
   visual_align_required_frames_ = declare_parameter("visual_align_required_frames", 3);
-  reach_hold_frames_ = declare_parameter("reach_hold_frames", 3);
+  reach_hold_frames_ = declare_parameter("reach_hold_frames", 1);
   visual_takeover_timeout_sec_ = declare_parameter("visual_takeover_timeout_sec", 5.0);
   fine_data_stale_timeout_sec_ = declare_parameter("fine_data_stale_timeout_sec", 0.5);
 

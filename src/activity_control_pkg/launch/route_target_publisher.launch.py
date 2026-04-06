@@ -33,7 +33,7 @@ def generate_launch_description():
                     # route 判定用的高度容差，单位 cm；调大后更容易完成航点，但高度精度会下降。
                     "height_tolerance_cm": 6.0,
                     # route 判定用的连续满足帧数；调大更稳，不容易因抖动误切点，但切点会稍慢。
-                    "reach_hold_frames": 3,
+                    "reach_hold_frames": 1,
                     # 视觉接管成功所需的像素半径阈值，单位 px；调大更容易触发成功，但对准会变松。
                     "visual_align_pixel_threshold": 100.0,
                     # 视觉接管连续对准帧数；调大更稳，但视觉任务完成会更慢。

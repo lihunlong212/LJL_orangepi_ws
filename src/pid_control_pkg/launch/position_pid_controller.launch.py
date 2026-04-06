@@ -23,7 +23,7 @@ def generate_launch_description() -> LaunchDescription:
                     "ki_xy": 0.0,
                     # XY 位置环微分系数；用于抑制逼近目标时的冲击，过大时会放大测量抖动。
                     "kd_xy": 0.2,
-                    # Yaw 角速度环比例系数；调大后朝向回正更快，但可能引入左右摆头。
+                    # Yaw 角速度环比例系数；调大后朝向回正更快，但可能引入左右摇头。
                     "kp_yaw": 1.0,
                     # Yaw 角速度环积分系数；用于消除持续偏航误差，通常从 0 开始调。
                     "ki_yaw": 0.0,
@@ -37,6 +37,10 @@ def generate_launch_description() -> LaunchDescription:
                     "kd_z": 0.2,
                     # XY 速度限幅，单位 cm/s；调大能更快接近目标，但靠近航点时更容易冲过头。
                     "max_linear_velocity": 33.0,
+                    # 接近航点时的限速触发距离，单位 cm；进入该范围后，XY 合速度将被压到指定上限。
+                    "approach_slowdown_distance_cm": 20.0,
+                    # 接近航点时的 XY 合速度上限，单位 cm/s；用于减小近点过冲和抖动。
+                    "approach_max_linear_velocity": 12.0,
                     # 偏航角速度限幅，单位 deg/s；调大回正更快，但机体转向会更猛。
                     "max_angular_velocity": 30.0,
                     # 垂直速度限幅，单位 cm/s；调大升降更快，但高度稳定性会下降。
