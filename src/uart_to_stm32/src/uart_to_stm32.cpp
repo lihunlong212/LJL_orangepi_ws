@@ -20,6 +20,7 @@ UartToStm32::UartToStm32(rclcpp::Node::SharedPtr node)
   current_yaw_(0.0),
   yaw_valid_(false),
   velocity_valid_(false),
+  target_velocity_enabled_(false),
   has_st_ready_pub_(false)
 {
   RCLCPP_INFO(node_->get_logger(), "UartToStm32 created");
@@ -68,6 +69,10 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       "/velocity_map", 10,
       std::bind(&UartToStm32::velocityCallback, this, std::placeholders::_1));
 
+    is_fly_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/is_fly", 10,
+      std::bind(&UartToStm32::isFlyCallback, this, std::placeholders::_1));
+
     target_velocity_sub_ = node_->create_subscription<std_msgs::msg::Float32MultiArray>(
       "/target_velocity", 10,
       std::bind(&UartToStm32::targetVelocityCallback, this, std::placeholders::_1));
@@ -95,7 +100,7 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     RCLCPP_INFO(node_->get_logger(), "UartToStm32 initialized successfully");
     RCLCPP_INFO(
       node_->get_logger(),
-      "Subscribed to /velocity_map, /target_velocity, /visual_aligned_apriltag_code, and /mission_complete topics");
+      "Subscribed to /velocity_map, /is_fly, /target_velocity, /visual_aligned_apriltag_code, and /mission_complete topics");
     return true;
 
   } catch (const std::exception & e) {
@@ -147,6 +152,24 @@ void UartToStm32::processTfTransform(const geometry_msgs::msg::TransformStamped 
     const Eigen::Vector3d transformed_vel = transformVelocity(linear_vel, current_yaw_);
     sendVelocityToSerial(transformed_vel);
   }
+}
+
+void UartToStm32::isFlyCallback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  if (msg->data) {
+    if (!target_velocity_enabled_) {
+      target_velocity_enabled_ = true;
+      RCLCPP_INFO(
+        node_->get_logger(),
+        "Received /is_fly=true. Target velocity forwarding to STM32 is now enabled permanently.");
+    }
+    return;
+  }
+
+  RCLCPP_INFO_THROTTLE(
+    node_->get_logger(), *node_->get_clock(), 5000,
+    "Received /is_fly=false. Target velocity forwarding remains %s.",
+    target_velocity_enabled_ ? "enabled" : "disabled");
 }
 
 void UartToStm32::velocityCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -229,6 +252,13 @@ void UartToStm32::sendVelocityToSerial(const Eigen::Vector3d & transformed_veloc
 
 void UartToStm32::targetVelocityCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
+  if (!target_velocity_enabled_) {
+    RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 5000,
+      "Dropping /target_velocity because /is_fly=true has not been received yet.");
+    return;
+  }
+
   if (msg->data.size() < 4) {
     RCLCPP_WARN(node_->get_logger(),
       "Target velocity message should contain 4 float values [vx_cm/s, vy_cm/s, vz_cm/s, vyaw_deg/s]");
@@ -240,8 +270,6 @@ void UartToStm32::targetVelocityCallback(const std_msgs::msg::Float32MultiArray:
   const float vz_cm_per_s = msg->data[2];
   const float vyaw_deg_per_s = msg->data[3];
 
-  // This control path assumes map +X is aligned with the aircraft forward direction at takeoff
-  // and yaw is regulated near zero, so the target velocity is forwarded without extra frame rotation.
   RCLCPP_INFO_THROTTLE(
     node_->get_logger(), *node_->get_clock(), 1000,
     "Target Velocity: linear(%.1f, %.1f, %.1f)cm/s angular(%.1f)deg/s",
@@ -288,7 +316,7 @@ void UartToStm32::sendTargetVelocityToSerial(
   }
 }
 
-void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data)
+void UartToStm32::protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data)   
 {
   switch (id) {
     case ST_READY_QUERY_ID: {
@@ -440,4 +468,4 @@ void UartToStm32::missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr)
   }
 }
 
-}  // namespace uart_to_stm32
+}  // 命名空间 uart_to_stm32

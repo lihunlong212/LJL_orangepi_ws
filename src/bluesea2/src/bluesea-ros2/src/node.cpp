@@ -513,7 +513,7 @@ bool ProfileInit(std::shared_ptr<rclcpp::Node> node, ArgData &argdata)
 			}
 			else if (argdata.type == "uart")
 			{
-				READ_PARAM(std::string, "port", arg.arg1, std::string("/dev/ttyS5"));
+				READ_PARAM(std::string, "port", arg.arg1, std::string("/dev/ttyUSB0"));
 				READ_PARAM(int, "baud_rate", arg.arg2, 500000);
 				DEBUG("%d", arg.arg2);
 			}

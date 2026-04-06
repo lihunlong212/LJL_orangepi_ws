@@ -137,8 +137,6 @@ PositionPIDController::PositionPIDController()
   max_linear_vel_(36.0),
   max_angular_vel_(30.0),
   max_vertical_vel_(30.0),
-  approach_slowdown_distance_cm_(20.0),
-  approach_max_linear_velocity_(12.0),
   visual_kp_x_(0.08),
   visual_ki_x_(0.0),
   visual_kd_x_(0.01),
@@ -204,11 +202,6 @@ void PositionPIDController::targetPositionCallback(const std_msgs::msg::Float32M
   target_yaw_deg_ = static_cast<double>(msg->data[3]);
   has_target_position_ = true;
 
-  // Reset the main waypoint PID state so the previous target does not leak into the next leg.
-  pid_z_.reset();
-  pid_yaw_.reset();
-  pid_xy_speed_.reset();
-
   RCLCPP_INFO(get_logger(),
     "Received target: x=%.1fcm y=%.1fcm z=%.1fcm yaw=%.1fdeg",
     target_x_cm_, target_y_cm_, target_z_cm_, target_yaw_deg_);
@@ -265,6 +258,7 @@ bool PositionPIDController::getCurrentPose()
     double yaw = 0.0;
     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
     current_yaw_deg_ = radToDeg(yaw);
+
     return true;
   } catch (const tf2::TransformException & ex) {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -330,9 +324,6 @@ std_msgs::msg::Float32MultiArray PositionPIDController::processPID(double dt)
       double speed_cmd = -pid_xy_speed_.calculate(0.0, distance_xy_cm_, dt);
       if (speed_cmd < 0.0) {
         speed_cmd = 0.0;
-      }
-      if (distance_xy_cm_ <= approach_slowdown_distance_cm_) {
-        speed_cmd = std::min(speed_cmd, approach_max_linear_velocity_);
       }
       const double cos_theta = error_x_cm_ / distance_xy_cm_;
       const double sin_theta = error_y_cm_ / distance_xy_cm_;
@@ -418,8 +409,6 @@ void PositionPIDController::loadParameters()
   max_linear_vel_ = declare_parameter<double>("max_linear_velocity", 33.0);
   max_angular_vel_ = declare_parameter<double>("max_angular_velocity", 30.0);
   max_vertical_vel_ = declare_parameter<double>("max_vertical_velocity", 30.0);
-  approach_slowdown_distance_cm_ = declare_parameter<double>("approach_slowdown_distance_cm", 20.0);
-  approach_max_linear_velocity_ = declare_parameter<double>("approach_max_linear_velocity", 12.0);
 
   visual_kp_x_ = declare_parameter<double>("visual_kp_x", 0.08);
   visual_ki_x_ = declare_parameter<double>("visual_ki_x", 0.0);
@@ -457,12 +446,9 @@ void PositionPIDController::loadParameters()
   RCLCPP_INFO(get_logger(),
     "Velocity limits: linear=%.1fcm/s angular=%.1fdeg/s vertical=%.1fcm/s",
     max_linear_vel_, max_angular_vel_, max_vertical_vel_);
-  RCLCPP_INFO(get_logger(),
-    "Approach slowdown: distance=%.1fcm max_linear=%.1fcm/s",
-    approach_slowdown_distance_cm_, approach_max_linear_velocity_);
 }
 
-}  // namespace pid_control_pkg
+}  // 命名空间 pid_control_pkg
 
 int main(int argc, char ** argv)
 {

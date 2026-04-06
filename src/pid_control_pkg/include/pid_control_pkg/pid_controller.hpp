@@ -114,8 +114,6 @@ private:
   double max_linear_vel_;
   double max_angular_vel_;
   double max_vertical_vel_;
-  double approach_slowdown_distance_cm_;
-  double approach_max_linear_velocity_;
 
   double visual_kp_x_;
   double visual_ki_x_;
@@ -142,6 +140,6 @@ private:
   rclcpp::Time last_update_time_;
 };
 
-}  // namespace pid_control_pkg
+}  // 命名空间 pid_control_pkg
 
-#endif  // PID_CONTROL_PKG__PID_CONTROLLER_HPP_
+#endif  // 头文件保护宏 PID_CONTROL_PKG__PID_CONTROLLER_HPP_

@@ -67,6 +67,6 @@ def generate_launch_description():
         uart_to_stm32_launch,
         position_pid_controller_launch,
         route_test_launch,
-       # drone_camera_node,
+        drone_camera_node,
 
     ])

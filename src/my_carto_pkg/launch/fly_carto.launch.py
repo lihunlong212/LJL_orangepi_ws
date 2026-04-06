@@ -106,8 +106,8 @@ def generate_launch_description():
             actions=[cartographer_node, cartographer_occupancy_grid_node]
         ),
         # Step 4: Launch rviz2
-        #TimerAction(
-         #   period=12.0,
-          #  actions=[rviz_node]
-        #),
+        TimerAction(
+            period=12.0,
+            actions=[rviz_node]
+        ),
     ])

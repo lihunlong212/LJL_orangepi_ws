@@ -89,7 +89,6 @@ private:
 
   double visual_align_pixel_threshold_;
   int visual_align_required_frames_;
-  int reach_hold_frames_;
   double visual_takeover_timeout_sec_;
   double fine_data_stale_timeout_sec_;
 
@@ -104,7 +103,6 @@ private:
   rclcpp::Time last_apriltag_code_time_;
   bool mission_complete_sent_;
 
-  int reach_hold_count_;
   int aligned_frame_count_;
   rclcpp::Time visual_takeover_start_time_;
 };
@@ -126,4 +124,4 @@ private:
   int next_target_index_;
 };
 
-}  // namespace activity_control_pkg
+}  // 命名空间 activity_control_pkg
