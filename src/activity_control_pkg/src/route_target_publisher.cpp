@@ -539,24 +539,12 @@ void RouteTestNode::addTimerCallback()
   Target target{};
   switch (next_target_index_) {
     case 1:
-      target = Target{100.0, 0.0, 130.0, 0.0, false};
+      target = Target{125.0, 100.0, 130.0, 0.0, true};
       break;
     case 2:
-      target = Target{100.0, 50.0, 130.0, 0.0, false};
-      break;
-    case 3:
-      target = Target{100.0, 50.0, 40.0, 0.0, false};
-      break;
-    case 4:
-      target = Target{100.0, 50.0, 130.0, 0.0, false};
-      break;
-    case 5:
-      target = Target{100.0, 0.0, 130.0, 0.0, false};
-      break;
-    case 6:
       target = Target{0.0, 0.0, 130.0, 0.0, false};
       break;
-    case 7:
+    case 3:
       target = Target{0.0, 0.0, 0.0, 0.0, false};
       break;
     default:
