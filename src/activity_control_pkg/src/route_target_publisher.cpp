@@ -501,72 +501,106 @@ RouteTestNode::RouteTestNode(
   const rclcpp::NodeOptions & options)
 : rclcpp::Node("route_test_node", options),
   route_node_(route_node),
-  started_(false),
-  next_target_index_(1)
+  route_locked_(false)
 {
   std::setlocale(LC_ALL, "");
 
-  add_timer_ = create_wall_timer(
-    std::chrono::seconds(1),
-    std::bind(&RouteTestNode::addTimerCallback, this));
-  add_timer_->cancel();
+  routes_ = buildRoutes();
+  route_choice_sub_ = create_subscription<std_msgs::msg::UInt8>(
+    "/route_choice",
+    rclcpp::QoS(10),
+    std::bind(&RouteTestNode::routeChoiceCallback, this, std::placeholders::_1));
 
-  RCLCPP_INFO(get_logger(), "Route test node started. Adding the first target.");
-
-  const Target first{0.0, 0.0, 130.0, 0.0, false};
-  route_node_->addTarget(first);
-
-  const auto current = route_node_->currentIndex();
   RCLCPP_INFO(
     get_logger(),
-    "Added first target: x=%.1f y=%.1f z=%.1f yaw=%.1f | current=%zu",
-    first.x_cm,
-    first.y_cm,
-    first.z_cm,
-    first.yaw_deg,
-    (current == std::numeric_limits<std::size_t>::max() ? 0 : current + 1));
-
-  add_timer_->reset();
-  started_ = true;
+    "Route selection node is waiting on /route_choice. Available routes: %zu",
+    routes_.size());
 }
 
-void RouteTestNode::addTimerCallback()
+void RouteTestNode::routeChoiceCallback(const std_msgs::msg::UInt8::SharedPtr msg)
 {
-  if (!started_) {
+  const RouteId route_id = msg->data;
+  if (route_locked_) {
+    RCLCPP_INFO(
+      get_logger(),
+      "Ignoring /route_choice=%u because a route is already active or has already started.",
+      static_cast<unsigned>(route_id));
     return;
   }
 
-  Target target{};
-  switch (next_target_index_) {
-    case 1:
-      target = Target{125.0, 100.0, 130.0, 0.0, true};
-      break;
-    case 2:
-      target = Target{0.0, 0.0, 130.0, 0.0, false};
-      break;
-    case 3:
-      target = Target{0.0, 0.0, 0.0, 0.0, false};
-      break;
-    default:
-      add_timer_->cancel();
-      RCLCPP_INFO(get_logger(), "All preset targets have been added.");
-      return;
+  const auto route_it = routes_.find(route_id);
+  if (route_it == routes_.end()) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Received unsupported /route_choice=%u. Route will not start.",
+      static_cast<unsigned>(route_id));
+    return;
   }
 
-  route_node_->addTarget(target);
+  if (route_it->second.empty()) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Received /route_choice=%u, but the route is empty. Ignoring.",
+      static_cast<unsigned>(route_id));
+    return;
+  }
+
+  loadRoute(route_id, route_it->second);
+}
+
+std::unordered_map<RouteTestNode::RouteId, std::vector<Target>> RouteTestNode::buildRoutes() const
+{
+  std::unordered_map<RouteId, std::vector<Target>> routes;
+
+  routes.emplace(RouteId{1}, std::vector<Target>{
+    Target{0.0, 0.0, 130.0, 0.0, false},
+    Target{125.0, 100.0, 130.0, 0.0, true},
+    Target{0.0, 0.0, 130.0, 0.0, false},
+    Target{0.0, 0.0, 0.0, 0.0, false},
+  });
+
+  routes.emplace(RouteId{2}, std::vector<Target>{
+    Target{0.0, 0.0, 130.0, 0.0, false},
+    Target{125.0, -100.0, 130.0, 0.0, true},
+    Target{0.0, 0.0, 130.0, 0.0, false},
+    Target{0.0, 0.0, 0.0, 0.0, false},
+  });
+
+  return routes;
+}
+
+void RouteTestNode::loadRoute(RouteId route_id, const std::vector<Target> & route)
+{
+  route_locked_ = true;
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Received /route_choice=%u. Loading route with %zu targets.",
+    static_cast<unsigned>(route_id),
+    route.size());
+
+  for (std::size_t index = 0; index < route.size(); ++index) {
+    const auto & target = route[index];
+    route_node_->addTarget(target);
+    RCLCPP_INFO(
+      get_logger(),
+      "Loaded route %u target %zu/%zu: x=%.1f y=%.1f z=%.1f yaw=%.1f takeover=%s",
+      static_cast<unsigned>(route_id),
+      index + 1,
+      route.size(),
+      target.x_cm,
+      target.y_cm,
+      target.z_cm,
+      target.yaw_deg,
+      target.is_takeover ? "true" : "false");
+  }
+
   const auto current = route_node_->currentIndex();
   RCLCPP_INFO(
     get_logger(),
-    "Queued target idx=%d: x=%.1f y=%.1f z=%.1f yaw=%.1f takeover=%s | current=%zu",
-    next_target_index_,
-    target.x_cm,
-    target.y_cm,
-    target.z_cm,
-    target.yaw_deg,
-    target.is_takeover ? "true" : "false",
+    "Route %u is now active. Current target index=%zu",
+    static_cast<unsigned>(route_id),
     (current == std::numeric_limits<std::size_t>::max() ? 0 : current + 1));
-
-  ++next_target_index_;
 }
 
 }  // namespace activity_control_pkg

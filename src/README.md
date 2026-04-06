@@ -19,6 +19,7 @@ source install/setup.bash
 - `bluesea2` publishes `/scan`
 - `activity_control_pkg` publishes `/target_position` and `/active_controller`
 - `drone_camera_pkg` publishes `/fine_data` and `/apriltag_code`
+- An external ROS 2 node publishes `/route_choice` to select which waypoint group should run
 - `activity_control_pkg` enters visual takeover for selected waypoints, republishes the target with a configured visual-alignment height, and publishes `/visual_takeover_active`
 - `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
 - An external ROS 2 node publishes `/is_fly` as the remote-control enable signal
@@ -34,6 +35,13 @@ source install/setup.bash
 ### `activity_control_pkg`
 
 Maintains the waypoint queue, checks whether the current target is reached, and triggers visual takeover when `Target.is_takeover` is `true`.
+
+Route selection behavior:
+
+- The node starts in standby and does not publish any waypoint until `/route_choice` is received
+- `/route_choice` uses `std_msgs/msg/UInt8`
+- `1` starts the first built-in waypoint group and `2` starts the second built-in waypoint group
+- After a valid route starts, later `/route_choice` messages are ignored for the rest of that run
 
 Visual takeover behavior:
 

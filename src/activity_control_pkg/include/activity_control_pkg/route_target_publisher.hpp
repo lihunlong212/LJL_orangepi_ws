@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -117,13 +119,16 @@ public:
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-  void addTimerCallback();
+  using RouteId = std::uint8_t;
+
+  void routeChoiceCallback(const std_msgs::msg::UInt8::SharedPtr msg);
+  std::unordered_map<RouteId, std::vector<Target>> buildRoutes() const;
+  void loadRoute(RouteId route_id, const std::vector<Target> & route);
 
   std::shared_ptr<RouteTargetPublisherNode> route_node_;
-  rclcpp::TimerBase::SharedPtr add_timer_;
-
-  bool started_;
-  int next_target_index_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr route_choice_sub_;
+  std::unordered_map<RouteId, std::vector<Target>> routes_;
+  bool route_locked_;
 };
 
 }  // namespace activity_control_pkg
