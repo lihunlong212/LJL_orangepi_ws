@@ -81,6 +81,6 @@ private:
   static constexpr uint8_t MISSION_COMPLETE_VALUE = 0x06;
 };
 
-}  // namespace uart_to_stm32
+}  // 命名空间 uart_to_stm32
 
-#endif  // UART_TO_STM32__UART_TO_STM32_HPP_
+#endif  // 头文件保护宏 UART_TO_STM32__UART_TO_STM32_HPP_

@@ -448,7 +448,7 @@ void PositionPIDController::loadParameters()
     max_linear_vel_, max_angular_vel_, max_vertical_vel_);
 }
 
-}  // namespace pid_control_pkg
+}  // 命名空间 pid_control_pkg
 
 int main(int argc, char ** argv)
 {

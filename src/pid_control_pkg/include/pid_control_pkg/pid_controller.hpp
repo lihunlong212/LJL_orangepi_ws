@@ -140,6 +140,6 @@ private:
   rclcpp::Time last_update_time_;
 };
 
-}  // namespace pid_control_pkg
+}  // 命名空间 pid_control_pkg
 
-#endif  // PID_CONTROL_PKG__PID_CONTROLLER_HPP_
+#endif  // 头文件保护宏 PID_CONTROL_PKG__PID_CONTROLLER_HPP_

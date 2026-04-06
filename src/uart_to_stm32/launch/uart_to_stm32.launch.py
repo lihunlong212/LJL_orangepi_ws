@@ -4,10 +4,10 @@ from launch_ros.actions import Node
 
 def generate_launch_description() -> LaunchDescription:
     uart_params = {
-        # Serial bridge runtime parameters
-        "update_rate": 100.0,          # TF lookup and velocity send rate in Hz
-        "source_frame": "map",         # Velocity source frame
-        "target_frame": "laser_link",  # Frame used before sending to STM32
+        # 串口桥运行参数
+        "update_rate": 100.0,          # TF 查询与速度发送频率，单位 Hz
+        "source_frame": "map",         # 速度源坐标系
+        "target_frame": "laser_link",  # 发送到 STM32 前使用的目标坐标系
     }
 
     return LaunchDescription([

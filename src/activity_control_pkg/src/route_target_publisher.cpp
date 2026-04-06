@@ -29,6 +29,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   current_height_cm_(0.0),
   visual_align_pixel_threshold_(0.0),
   visual_align_required_frames_(0),
+  visual_takeover_target_height_cm_(0.0),
   visual_takeover_timeout_sec_(0.0),
   fine_data_stale_timeout_sec_(0.0),
   visual_takeover_active_(false),
@@ -48,6 +49,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   output_topic_ = declare_parameter("output_topic", "/target_position");
   visual_align_pixel_threshold_ = declare_parameter("visual_align_pixel_threshold", 100.0);
   visual_align_required_frames_ = declare_parameter("visual_align_required_frames", 3);
+  visual_takeover_target_height_cm_ = declare_parameter("visual_takeover_target_height_cm", 40.0);
   visual_takeover_timeout_sec_ = declare_parameter("visual_takeover_timeout_sec", 5.0);
   fine_data_stale_timeout_sec_ = declare_parameter("fine_data_stale_timeout_sec", 0.5);
 
@@ -97,9 +99,10 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
     height_tol_cm_);
   RCLCPP_INFO(
     get_logger(),
-    "Visual takeover: threshold=%.1fpx frames=%d timeout=%.1fs stale=%.1fs",
+    "Visual takeover: threshold=%.1fpx frames=%d target_height=%.1fcm timeout=%.1fs stale=%.1fs",
     visual_align_pixel_threshold_,
     visual_align_required_frames_,
+    visual_takeover_target_height_cm_,
     visual_takeover_timeout_sec_,
     fine_data_stale_timeout_sec_);
 }
@@ -133,7 +136,7 @@ std::size_t RouteTargetPublisherNode::size() const
 void RouteTargetPublisherNode::publishCurrent()
 {
   if (current_idx_ != std::numeric_limits<std::size_t>::max() && current_idx_ < targets_.size()) {
-    publishTarget(targets_[current_idx_], current_idx_ == 0);
+    publishTarget(getPublishedTarget(targets_[current_idx_]), current_idx_ == 0);
   }
 }
 
@@ -160,6 +163,15 @@ void RouteTargetPublisherNode::publishTarget(const Target & target, bool init_fl
     target.yaw_deg,
     target.is_takeover ? "true" : "false",
     init_flag ? " (first)" : "");
+}
+
+Target RouteTargetPublisherNode::getPublishedTarget(const Target & target) const
+{
+  Target published_target = target;
+  if (visual_takeover_active_ && target.is_takeover) {
+    published_target.z_cm = visual_takeover_target_height_cm_;
+  }
+  return published_target;
 }
 
 void RouteTargetPublisherNode::heightCallback(const std_msgs::msg::Int16::SharedPtr msg)
@@ -270,8 +282,15 @@ void RouteTargetPublisherNode::enterVisualTakeover()
   visual_takeover_active_ = true;
   aligned_frame_count_ = 0;
   visual_takeover_start_time_ = now();
+  if (current_idx_ < targets_.size()) {
+    publishTarget(getPublishedTarget(targets_[current_idx_]), false);
+  }
   publishVisualTakeoverState(true);
-  RCLCPP_INFO(get_logger(), "Entered visual takeover for target %zu.", current_idx_);
+  RCLCPP_INFO(
+    get_logger(),
+    "Entered visual takeover for target %zu. Visual target height=%.1fcm.",
+    current_idx_,
+    visual_takeover_target_height_cm_);
 }
 
 void RouteTargetPublisherNode::exitVisualTakeover()
@@ -367,21 +386,27 @@ void RouteTargetPublisherNode::monitorTimerCallback()
     const double pixel_radius = std::hypot(
       static_cast<double>(fine_error_x_px_),
       static_cast<double>(fine_error_y_px_));
+    const double height_error_cm = visual_takeover_target_height_cm_ - z_cm;
+    const bool height_ok = std::fabs(height_error_cm) <= height_tol_cm_;
+    const bool xy_ok = pixel_radius < visual_align_pixel_threshold_;
 
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
       1000,
-      "Visual takeover target %zu: x_px=%d y_px=%d radius=%.1f threshold=%.1f frames=%d/%d",
+      "Visual takeover target %zu: x_px=%d y_px=%d radius=%.1f threshold=%.1f height_err=%.1fcm target_z=%.1fcm current_z=%.1fcm frames=%d/%d",
       current_idx_,
       fine_error_x_px_,
       fine_error_y_px_,
       pixel_radius,
       visual_align_pixel_threshold_,
+      height_error_cm,
+      visual_takeover_target_height_cm_,
+      z_cm,
       aligned_frame_count_,
       visual_align_required_frames_);
 
-    if (pixel_radius < visual_align_pixel_threshold_) {
+    if (xy_ok && height_ok) {
       ++aligned_frame_count_;
       if (aligned_frame_count_ >= visual_align_required_frames_) {
         if (hasFreshAprilTagCode(now_time) && latest_apriltag_code_ >= 0 && latest_apriltag_code_ <= 255) {
@@ -405,6 +430,14 @@ void RouteTargetPublisherNode::monitorTimerCallback()
       }
     } else {
       aligned_frame_count_ = 0;
+      RCLCPP_DEBUG_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Visual takeover gating not met for target %zu: xy_ok=%s height_ok=%s",
+        current_idx_,
+        xy_ok ? "true" : "false",
+        height_ok ? "true" : "false");
     }
     return;
   }

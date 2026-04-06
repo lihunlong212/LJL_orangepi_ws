@@ -28,6 +28,7 @@ def generate_launch_description():
                     "height_tolerance_cm": 6.0,
                     "visual_align_pixel_threshold": 100.0,
                     "visual_align_required_frames": 3,
+                    "visual_takeover_target_height_cm": 40.0,
                     "visual_takeover_timeout_sec": 5.0,
                     "fine_data_stale_timeout_sec": 0.5,
                 }

@@ -40,6 +40,7 @@ public:
 private:
   void publishCurrent();
   void publishTarget(const Target & target, bool init_flag);
+  Target getPublishedTarget(const Target & target) const;
 
   bool getCurrentPose(double & x_cm, double & y_cm, double & z_cm, double & yaw_deg);
   bool isReached(const Target & target, double x_cm, double y_cm, double z_cm, double yaw_deg) const;
@@ -89,6 +90,7 @@ private:
 
   double visual_align_pixel_threshold_;
   int visual_align_required_frames_;
+  double visual_takeover_target_height_cm_;
   double visual_takeover_timeout_sec_;
   double fine_data_stale_timeout_sec_;
 

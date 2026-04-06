@@ -19,7 +19,7 @@ source install/setup.bash
 - `bluesea2` publishes `/scan`
 - `activity_control_pkg` publishes `/target_position` and `/active_controller`
 - `drone_camera_pkg` publishes `/fine_data` and `/apriltag_code`
-- `activity_control_pkg` enters visual takeover for selected waypoints and publishes `/visual_takeover_active`
+- `activity_control_pkg` enters visual takeover for selected waypoints, republishes the target with a configured visual-alignment height, and publishes `/visual_takeover_active`
 - `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
 - An external ROS 2 node publishes `/is_fly` as the remote-control enable signal
 - `activity_control_pkg` publishes `/visual_aligned_apriltag_code` after visual alignment succeeds
@@ -34,6 +34,13 @@ source install/setup.bash
 ### `activity_control_pkg`
 
 Maintains the waypoint queue, checks whether the current target is reached, and triggers visual takeover when `Target.is_takeover` is `true`.
+
+Visual takeover behavior:
+
+- XY alignment still comes from `/fine_data`
+- Z is switched to the configurable `visual_takeover_target_height_cm`
+- `height_tolerance_cm` is shared by normal waypoint reach checks and visual-alignment height checks
+- `/visual_aligned_apriltag_code` is published only after XY stays aligned for the required frames and height is also within tolerance
 
 Key files:
 
