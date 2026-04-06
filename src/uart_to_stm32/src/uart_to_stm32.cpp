@@ -14,13 +14,21 @@ namespace uart_to_stm32
 
 using namespace std::chrono_literals;
 
+namespace
+{
+bool isSupportedRouteChoice(uint8_t route_id)
+{
+  return route_id == 1 || route_id == 2;
+}
+}  // namespace
+
 UartToStm32::UartToStm32(rclcpp::Node::SharedPtr node)
 : node_(std::move(node)),
   update_rate_(0.0),
   current_yaw_(0.0),
   yaw_valid_(false),
   velocity_valid_(false),
-  target_velocity_enabled_(false),
+  route_task_active_(false),
   has_st_ready_pub_(false)
 {
   RCLCPP_INFO(node_->get_logger(), "UartToStm32 created");
@@ -69,9 +77,9 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
       "/velocity_map", 10,
       std::bind(&UartToStm32::velocityCallback, this, std::placeholders::_1));
 
-    is_fly_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-      "/is_fly", 10,
-      std::bind(&UartToStm32::isFlyCallback, this, std::placeholders::_1));
+    route_choice_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
+      "/route_choice", 10,
+      std::bind(&UartToStm32::routeChoiceCallback, this, std::placeholders::_1));
 
     target_velocity_sub_ = node_->create_subscription<std_msgs::msg::Float32MultiArray>(
       "/target_velocity", 10,
@@ -100,7 +108,7 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     RCLCPP_INFO(node_->get_logger(), "UartToStm32 initialized successfully");
     RCLCPP_INFO(
       node_->get_logger(),
-      "Subscribed to /velocity_map, /is_fly, /target_velocity, /visual_aligned_apriltag_code, and /mission_complete topics");
+      "Subscribed to /velocity_map, /route_choice, /target_velocity, /visual_aligned_apriltag_code, and /mission_complete topics");
     return true;
 
   } catch (const std::exception & e) {
@@ -154,22 +162,31 @@ void UartToStm32::processTfTransform(const geometry_msgs::msg::TransformStamped 
   }
 }
 
-void UartToStm32::isFlyCallback(const std_msgs::msg::Bool::SharedPtr msg)
+void UartToStm32::routeChoiceCallback(const std_msgs::msg::UInt8::SharedPtr msg)
 {
-  if (msg->data) {
-    if (!target_velocity_enabled_) {
-      target_velocity_enabled_ = true;
-      RCLCPP_INFO(
-        node_->get_logger(),
-        "Received /is_fly=true. Target velocity forwarding to STM32 is now enabled permanently.");
-    }
+  const uint8_t route_id = msg->data;
+  if (!isSupportedRouteChoice(route_id)) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 2000,
+      "Ignoring unsupported /route_choice=%u. Target velocity forwarding stays %s.",
+      static_cast<unsigned>(route_id),
+      route_task_active_ ? "enabled" : "disabled");
+    return;
+  }
+
+  if (!route_task_active_) {
+    route_task_active_ = true;
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "Received /route_choice=%u. Target velocity forwarding to STM32 is now enabled for the active task.",
+      static_cast<unsigned>(route_id));
     return;
   }
 
   RCLCPP_INFO_THROTTLE(
-    node_->get_logger(), *node_->get_clock(), 5000,
-    "Received /is_fly=false. Target velocity forwarding remains %s.",
-    target_velocity_enabled_ ? "enabled" : "disabled");
+    node_->get_logger(), *node_->get_clock(), 2000,
+    "Received /route_choice=%u while a route task is already active. Target velocity forwarding remains enabled.",
+    static_cast<unsigned>(route_id));
 }
 
 void UartToStm32::velocityCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -252,10 +269,10 @@ void UartToStm32::sendVelocityToSerial(const Eigen::Vector3d & transformed_veloc
 
 void UartToStm32::targetVelocityCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
-  if (!target_velocity_enabled_) {
+  if (!route_task_active_) {
     RCLCPP_INFO_THROTTLE(
       node_->get_logger(), *node_->get_clock(), 5000,
-      "Dropping /target_velocity because /is_fly=true has not been received yet.");
+      "Dropping /target_velocity because there is no active route task yet.");
     return;
   }
 
@@ -466,6 +483,11 @@ void UartToStm32::missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr)
     sendMissionCompleteToSerial();
     std::this_thread::sleep_for(100ms);
   }
+
+  route_task_active_ = false;
+  RCLCPP_INFO(
+    node_->get_logger(),
+    "Mission complete sent. Target velocity forwarding is now disabled until the next valid /route_choice.");
 }
 
 }  // 命名空间 uart_to_stm32

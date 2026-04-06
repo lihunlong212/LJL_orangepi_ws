@@ -22,9 +22,8 @@ source install/setup.bash
 - An external ROS 2 node publishes `/route_choice` to select which waypoint group should run
 - `activity_control_pkg` enters visual takeover for selected waypoints, republishes the target with a configured visual-alignment height, and publishes `/visual_takeover_active`
 - `pid_control_pkg` subscribes to `/target_position`, `/height`, `/visual_takeover_active`, and `/fine_data`, then publishes `/target_velocity`
-- An external ROS 2 node publishes `/is_fly` as the remote-control enable signal
 - `activity_control_pkg` publishes `/visual_aligned_apriltag_code` after visual alignment succeeds
-- `uart_to_stm32` listens to `/is_fly` and forwards `/target_velocity` to the flight controller only after receiving `/is_fly=true`
+- `uart_to_stm32` listens to `/route_choice` and forwards `/target_velocity` to the flight controller only while the selected route task is active
 - `uart_to_stm32` sends `/visual_aligned_apriltag_code` as serial frame `0x11`
 - `activity_control_pkg` publishes `/mission_complete` after all targets complete
 - `uart_to_stm32` sends `/mission_complete` as serial frame `0x66` with payload `0x06`
@@ -111,10 +110,10 @@ Bridges ROS topics and the STM32/flight-controller serial protocol.
 
 Remote-control gating:
 
-- `/is_fly` is published by an external ROS 2 node
-- `uart_to_stm32` subscribes to `/is_fly` using `std_msgs/msg/Bool`
-- after the first `/is_fly=true`, target velocity forwarding stays enabled and is not turned off again
-- before that first `true`, `/target_velocity` messages are ignored and not sent to STM32
+- `/route_choice` is published by an external ROS 2 node using `std_msgs/msg/UInt8`
+- valid route IDs currently include `1` and `2`
+- after a valid `/route_choice`, target velocity forwarding stays enabled only for the active mission
+- before route start and after mission completion, `/target_velocity` messages are ignored and not sent to STM32
 
 Key files:
 
