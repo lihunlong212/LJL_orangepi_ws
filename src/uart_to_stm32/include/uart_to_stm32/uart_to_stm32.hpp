@@ -13,6 +13,7 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.h>
@@ -41,6 +42,7 @@ private:
   void sendTargetVelocityToSerial(float vx_cm_per_s, float vy_cm_per_s, float vz_cm_per_s, float vyaw_deg_per_s);
   void sendAprilTagCodeToSerial(uint8_t apriltag_code);
   void sendMissionCompleteToSerial();
+  void publishDeliveryCommand();
   void visualAlignedAprilTagCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg);
   void missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr msg);
   void protocolDataHandler(uint8_t id, const std::vector<uint8_t> & data);
@@ -61,15 +63,18 @@ private:
 
   std::unique_ptr<serial_comm::SerialComm> serial_comm_;
 
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr delivery_command_pub_;
   rclcpp::Publisher<std_msgs::msg::Int16>::SharedPtr height_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr is_st_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr mission_step_pub_;
+  rclcpp::TimerBase::SharedPtr delivery_command_timer_;
 
   double current_yaw_;
   bool yaw_valid_;
   geometry_msgs::msg::Twist current_velocity_;
   bool velocity_valid_;
   bool route_task_active_;
+  bool delivery_command_active_;
   bool has_st_ready_pub_;
 
   static constexpr uint8_t VELOCITY_FRAME_ID = 0x32;

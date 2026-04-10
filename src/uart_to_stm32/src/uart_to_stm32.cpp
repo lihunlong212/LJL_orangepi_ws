@@ -29,6 +29,7 @@ UartToStm32::UartToStm32(rclcpp::Node::SharedPtr node)
   yaw_valid_(false),
   velocity_valid_(false),
   route_task_active_(false),
+  delivery_command_active_(false),
   has_st_ready_pub_(false)
 {
   RCLCPP_INFO(node_->get_logger(), "UartToStm32 created");
@@ -38,6 +39,9 @@ UartToStm32::~UartToStm32()
 {
   if (timer_) {
     timer_->cancel();
+  }
+  if (delivery_command_timer_) {
+    delivery_command_timer_->cancel();
   }
   if (serial_comm_) {
     serial_comm_->stop_protocol_receive();
@@ -88,10 +92,13 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
     visual_aligned_apriltag_code_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
       "/visual_aligned_apriltag_code", rclcpp::QoS(10),
       std::bind(&UartToStm32::visualAlignedAprilTagCodeCallback, this, std::placeholders::_1));
+
+      
     mission_complete_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
       "/mission_complete", rclcpp::QoS(10),
       std::bind(&UartToStm32::missionCompleteCallback, this, std::placeholders::_1));
 
+    delivery_command_pub_ = node_->create_publisher<std_msgs::msg::String>("/delivery_command", rclcpp::QoS(10));
     height_pub_ = node_->create_publisher<std_msgs::msg::Int16>("/height", 10);
     is_st_ready_pub_ =
       node_->create_publisher<std_msgs::msg::UInt8>("/is_st_ready", rclcpp::QoS(10).transient_local());
@@ -458,6 +465,21 @@ void UartToStm32::sendMissionCompleteToSerial()
   }
 }
 
+void UartToStm32::publishDeliveryCommand()
+{
+  if (!delivery_command_pub_) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 5000,
+      "/delivery_command publisher is not initialized");
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = "A";
+  delivery_command_pub_->publish(msg);
+  RCLCPP_DEBUG(node_->get_logger(), "Published /delivery_command: A Car starts delivery action!");
+}
+
 void UartToStm32::visualAlignedAprilTagCodeCallback(const std_msgs::msg::UInt8::SharedPtr msg)
 {
   RCLCPP_INFO(
@@ -470,6 +492,18 @@ void UartToStm32::visualAlignedAprilTagCodeCallback(const std_msgs::msg::UInt8::
     sendAprilTagCodeToSerial(msg->data);
     std::this_thread::sleep_for(100ms);
   }
+  
+  if (delivery_command_active_) {
+    RCLCPP_INFO(
+      node_->get_logger(),
+      "/delivery_command periodic publish is already active. Ignoring duplicate visual alignment trigger.");
+    return;
+  }
+
+  delivery_command_timer_ = node_->create_wall_timer( 1s,
+    std::bind(&UartToStm32::publishDeliveryCommand, this));
+  delivery_command_active_ = true;
+  RCLCPP_INFO(node_->get_logger(), "Started publishing /delivery_command='A' at 1 Hz.");
 }
 
 void UartToStm32::missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr)
@@ -485,6 +519,14 @@ void UartToStm32::missionCompleteCallback(const std_msgs::msg::Empty::SharedPtr)
   }
 
   route_task_active_ = false;
+  if (delivery_command_timer_) {
+    delivery_command_timer_->cancel();
+    delivery_command_timer_.reset();
+  }
+  if (delivery_command_active_) {
+    delivery_command_active_ = false;
+    RCLCPP_INFO(node_->get_logger(), "Stopped periodic publishing on /delivery_command.");
+  }
   RCLCPP_INFO(
     node_->get_logger(),
     "Mission complete sent. Target velocity forwarding is now disabled until the next valid /route_choice.");
