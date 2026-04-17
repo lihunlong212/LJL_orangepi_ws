@@ -13,19 +13,25 @@ PillarDetectorNode::PillarDetectorNode(const rclcpp::NodeOptions & options)
   done_(false),
   ranges_precomputed_(false)
 {
-  // 参数在 launch 文件中配置，这里只声明默认值
-  pillar_width_m_       = declare_parameter("pillar_width_m",       0.15);   // 柱子宽度 15 cm
-  edge_threshold_m_     = declare_parameter("edge_threshold_m",     0.08);   // 边沿突变阈值 8 cm
-  max_cluster_pts_      = declare_parameter("max_cluster_pts",       120);   // 簇最多点数
-  stability_range_m_    = declare_parameter("stability_range_m",     0.20);  // 柱面平整度容差 20 cm
-  map_x_min_m_          = declare_parameter("map_x_min_m",           0.5);   // 柱子距前方起点最近 50 cm
-  map_x_max_m_          = declare_parameter("map_x_max_m",           2.5);   // 柱子距前方边界最近 50 cm
-  map_y_min_m_          = declare_parameter("map_y_min_m",          -2.5);   // 柱子距右侧边界最近 50 cm
-  map_y_max_m_          = declare_parameter("map_y_max_m",          -0.5);   // 柱子距右侧起点最近 50 cm
-  accumulation_frames_  = declare_parameter("accumulation_frames",   20);    // 累积帧数（约 1.3 秒）
-  cluster_merge_dist_m_ = declare_parameter("cluster_merge_dist_m",  0.20);  // 聚类合并距离 20 cm
-  min_votes_            = declare_parameter("min_votes",              12);    // 最少投票帧数（20帧中至少12帧）
-  max_pillars_          = declare_parameter("max_pillars",            4);     // 最多柱子数量
+  // ── 地图/柱子有效区域 ──────────────────────────────────────
+  map_x_min_m_          = declare_parameter("map_x_min_m",           0.5);
+  map_x_max_m_          = declare_parameter("map_x_max_m",           2.5);
+  map_y_min_m_          = declare_parameter("map_y_min_m",          -2.5);
+  map_y_max_m_          = declare_parameter("map_y_max_m",          -0.5);
+
+  // ── 单帧分组参数 ───────────────────────────────────────────
+  // 同一组内相邻点最大距离：柱子宽15cm，点间距最大~15mm(2.5m处)，25cm足够分开不同柱子
+  group_dist_m_          = declare_parameter("group_dist_m",          0.25);
+  // 一个组至少多少个点才认为是柱子
+  min_pts_per_group_     = declare_parameter("min_pts_per_group",     4);
+  // 同帧内两个柱子中心最小距离（柱子间距≥80cm，用40cm作安全门槛）
+  min_pillar_separation_m_ = declare_parameter("min_pillar_separation_m", 0.40);
+
+  // ── 多帧累积参数 ───────────────────────────────────────────
+  accumulation_frames_   = declare_parameter("accumulation_frames",   20);
+  cluster_merge_dist_m_  = declare_parameter("cluster_merge_dist_m",  0.20);
+  min_votes_             = declare_parameter("min_votes",              8);
+  max_pillars_           = declare_parameter("max_pillars",            4);
 
   const std::string scan_topic = declare_parameter("scan_topic", std::string("/scan"));
 
@@ -39,20 +45,17 @@ PillarDetectorNode::PillarDetectorNode(const rclcpp::NodeOptions & options)
     rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable());
 
   RCLCPP_INFO(get_logger(),
-    "柱子检测节点启动，监听 '%s'，累积 %d 帧后输出结果",
-    scan_topic.c_str(), accumulation_frames_);
+    "柱子检测节点启动，监听 '%s'，累积 %d 帧后输出结果", scan_topic.c_str(), accumulation_frames_);
   RCLCPP_INFO(get_logger(),
-    "柱子有效范围: x=[%.1f, %.1f]  y=[%.1f, %.1f]  最多检测 %d 个柱子",
+    "柱子有效区域: x=[%.1f, %.1f]  y=[%.1f, %.1f]  最多 %d 个柱子",
     map_x_min_m_, map_x_max_m_, map_y_min_m_, map_y_max_m_, max_pillars_);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 预计算：对扫描段内每个索引，算出该角度方向上地图正方形的最大允许距离
-// 公式：r_max(θ) = min( x_max/cos(θ),  |y_min|/|sin(θ)| )
-// 几何意义：
-//   -90°→-45°  射线先碰右侧边(y=-3)，r_max = 3/|sinθ|，从 3m 增大到 4.24m
-//   -45°       射线打到右上角(3,-3)，r_max = 3√2 ≈ 4.24m（最大值）
-//   -45°→ 0°  射线先碰前方边(x=3)，r_max = 3/cosθ，从 4.24m 减小到 3m
+// 预计算每个角度到地图边界的最大允许距离
+// r_max(θ) = min( x_max/cos(θ),  |y_min|/|sin(θ)| )
+// -90°→-45°: r_max 从 2.5m 增大到 3.54m（受右侧边界限制）
+// -45°→  0°: r_max 从 3.54m 减小到 2.5m（受前方边界限制）
 // ─────────────────────────────────────────────────────────────────────────────
 void PillarDetectorNode::precomputeMaxRanges(const sensor_msgs::msg::LaserScan & scan)
 {
@@ -64,29 +67,21 @@ void PillarDetectorNode::precomputeMaxRanges(const sensor_msgs::msg::LaserScan &
                          static_cast<double>(i) * static_cast<double>(scan.angle_increment);
     const double cos_t = std::cos(theta);
     const double sin_t = std::sin(theta);
-
     double r_max = std::numeric_limits<double>::infinity();
 
-    // 前方外边界 x ≤ map_x_max：r·cos(θ) ≤ x_max → r ≤ x_max/cos(θ)
-    if (cos_t > 1e-9) {
-      r_max = std::min(r_max, map_x_max_m_ / cos_t);
-    }
-
-    // 右侧外边界 y ≥ map_y_min（负数）：r·sin(θ) ≥ y_min → r ≤ |y_min|/|sin(θ)|
-    if (sin_t < -1e-9) {
-      r_max = std::min(r_max, (-map_y_min_m_) / (-sin_t));
-    }
+    if (cos_t > 1e-9)  { r_max = std::min(r_max, map_x_max_m_ / cos_t); }
+    if (sin_t < -1e-9) { r_max = std::min(r_max, (-map_y_min_m_) / (-sin_t)); }
 
     max_range_per_idx_[i] = r_max;
   }
 
   ranges_precomputed_ = true;
-  RCLCPP_INFO(get_logger(),
-    "地图边界距离表预计算完成（共 %d 个角度）", n);
+  RCLCPP_INFO(get_logger(), "地图边界距离表预计算完成（共 %d 个角度）", n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 单帧检测
+// 单帧检测：逻辑大幅简化
+// 核心思路：地图范围内只有柱子，相邻的一组点就是一个柱子面
 // ─────────────────────────────────────────────────────────────────────────────
 std::vector<Detection> PillarDetectorNode::detectInFrame(
   const sensor_msgs::msg::LaserScan & scan)
@@ -95,104 +90,92 @@ std::vector<Detection> PillarDetectorNode::detectInFrame(
   const int n = static_cast<int>(scan.ranges.size());
   if (n < 8) { return detections; }
 
-  // 右前方象限：索引 25%~50%，对应角度 -π/2 ~ 0
+  // 右前方象限：索引 25%~50%，角度 -π/2 ~ 0
   const int seg_start = n / 4;
   const int seg_end   = n / 2;
 
-  // 角分辨率（弧度），用于自适应计算每个距离上柱子预期点数
-  // 0.3° = 0.005236 rad，点数 ≈ 柱宽 / (距离 × 角分辨率)
   const double ang_res = static_cast<double>(scan.angle_increment);
-
   auto angle_at = [&](int i) -> double {
-    return static_cast<double>(scan.angle_min) +
-           static_cast<double>(i) * ang_res;
+    return static_cast<double>(scan.angle_min) + static_cast<double>(i) * ang_res;
   };
-
   auto is_valid = [&](int i) -> bool {
     const float r = scan.ranges[i];
     return std::isfinite(r) && r >= scan.range_min && r <= scan.range_max;
   };
 
-  int i = seg_start;
-  while (i < seg_end - 1) {
-    if (!is_valid(i))     { ++i; continue; }
-    if (!is_valid(i + 1)) { i += 2; continue; }
+  // ── Step 1：收集所有落在柱子有效区域内的点 ──────────────────
+  struct Pt { double x, y; };
+  std::vector<Pt> in_bounds;
 
-    // ── 第一层过滤：按角度判断该点是否在地图范围内 ──
-    // 若测量距离 > 该角度方向到地图边界的最大距离，此点在地图外，直接跳过
-    if (static_cast<double>(scan.ranges[i]) > max_range_per_idx_[i]) {
-      ++i;
-      continue;
+  for (int i = seg_start; i < seg_end; ++i) {
+    if (!is_valid(i)) { continue; }
+    // 第一层：角度方向超出地图外边界，跳过
+    if (static_cast<double>(scan.ranges[i]) > max_range_per_idx_[i]) { continue; }
+
+    const double theta = angle_at(i);
+    const double r = static_cast<double>(scan.ranges[i]);
+    const double x = r * std::cos(theta);
+    const double y = r * std::sin(theta);
+
+    // 第二层：(x,y) 必须在柱子有效区域内（地图内只有柱子）
+    if (x >= map_x_min_m_ && x <= map_x_max_m_ &&
+        y >= map_y_min_m_ && y <= map_y_max_m_)
+    {
+      in_bounds.push_back({x, y});
     }
+  }
 
-    // 进入边沿：ranges[i] 比 ranges[i+1] 突然大（距离变近 = 遇到柱子前面）
-    if (static_cast<double>(scan.ranges[i]) - scan.ranges[i + 1] < edge_threshold_m_) {
-      ++i;
-      continue;
+  if (in_bounds.empty()) { return detections; }
+
+  // 第一帧打印诊断信息
+  if (frame_count_ == 0) {
+    RCLCPP_INFO(get_logger(),
+      "诊断: 区段有效点=%zu 个落入地图范围内", in_bounds.size());
+  }
+
+  // ── Step 2：按距离分组（相邻点 < group_dist 归为同组） ────────
+  // 同一柱子上相邻点间距 ≤ 15mm（2.5m处0.3°），不同柱子间距 ≥ 80cm
+  // group_dist=25cm 足以区分
+  std::vector<std::vector<Pt>> groups;
+  std::vector<Pt> cur_group = {in_bounds[0]};
+
+  for (std::size_t k = 1; k < in_bounds.size(); ++k) {
+    const Pt & prev = cur_group.back();
+    const Pt & curr = in_bounds[k];
+    const double dx = curr.x - prev.x;
+    const double dy = curr.y - prev.y;
+    if (std::sqrt(dx * dx + dy * dy) <= group_dist_m_) {
+      cur_group.push_back(curr);
+    } else {
+      if (static_cast<int>(cur_group.size()) >= min_pts_per_group_) {
+        groups.push_back(cur_group);
+      }
+      cur_group = {curr};
     }
+  }
+  if (static_cast<int>(cur_group.size()) >= min_pts_per_group_) {
+    groups.push_back(cur_group);
+  }
 
-    // ── 收集簇（柱子可见面） ──
-    const int cluster_start = i + 1;
+  // ── Step 3：计算每组中心，确保两柱子中心不能太近 ─────────────
+  for (const auto & group : groups) {
+    double sum_x = 0.0, sum_y = 0.0;
+    for (const auto & p : group) { sum_x += p.x; sum_y += p.y; }
+    const double cx = sum_x / static_cast<double>(group.size());
+    const double cy = sum_y / static_cast<double>(group.size());
 
-    // 自适应最少点数：根据进入边沿的距离计算该距离上柱子预期点数
-    // 预期点数 = 柱宽 / (距离 × 角分辨率)，取 2/3 作为最低要求（留余量）
-    const double r_entry = static_cast<double>(scan.ranges[cluster_start]);
-    const int expected_pts = static_cast<int>(pillar_width_m_ / (r_entry * ang_res));
-    const int adaptive_min_pts = std::max(3, expected_pts * 2 / 3);
-
-    int j = cluster_start;
-    float r_min = scan.ranges[j];
-    float r_max_val = scan.ranges[j];
-
-    while (j < seg_end - 1 && (j - cluster_start) < max_cluster_pts_) {
-      if (!is_valid(j + 1)) { break; }
-      // 退出边沿：ranges[j+1] 比 ranges[j] 突然大（距离变远 = 离开柱子）
-      if (static_cast<double>(scan.ranges[j + 1]) - scan.ranges[j] >= edge_threshold_m_) {
+    // 与已有候选距离检查：防止同一柱子被重复计入
+    bool too_close = false;
+    for (const auto & d : detections) {
+      const double dx = cx - d.x_m;
+      const double dy = cy - d.y_m;
+      if (std::sqrt(dx * dx + dy * dy) < min_pillar_separation_m_) {
+        too_close = true;
         break;
       }
-      ++j;
-      r_min = std::min(r_min, scan.ranges[j]);
-      r_max_val = std::max(r_max_val, scan.ranges[j]);
     }
-
-    const int cluster_end  = j;
-    const int cluster_size = cluster_end - cluster_start + 1;
-
-    const bool has_trailing =
-      (j < seg_end - 1) && is_valid(j + 1) &&
-      (static_cast<double>(scan.ranges[j + 1]) - scan.ranges[j] >= edge_threshold_m_);
-
-    if (has_trailing &&
-        cluster_size >= adaptive_min_pts &&
-        cluster_size <= max_cluster_pts_ &&
-        static_cast<double>(r_max_val - r_min) <= stability_range_m_)
-    {
-      // 计算柱面中心坐标
-      double sum_r = 0.0;
-      for (int k = cluster_start; k <= cluster_end; ++k) {
-        sum_r += scan.ranges[k];
-      }
-      const double r_mean    = sum_r / cluster_size;
-      const double theta_mid = (angle_at(cluster_start) + angle_at(cluster_end)) * 0.5;
-      const double x = r_mean * std::cos(theta_mid);
-      const double y = r_mean * std::sin(theta_mid);
-
-      // ── 第二层确认：(x,y) 落点是否在柱子有效区域内 ──
-      // 题目规定柱子中心距边界 ≥50cm，所以有效范围是 [0.5,2.5] × [-2.5,-0.5]
-      if (x >= map_x_min_m_ && x <= map_x_max_m_ &&
-          y >= map_y_min_m_ && y <= map_y_max_m_)
-      {
-        detections.push_back({x, y});
-        RCLCPP_DEBUG(get_logger(),
-          "  候选: x=%.3f y=%.3f  r=%.3f  θ=%.1f°  pts=%d(预期%d)  Δr=%.3f",
-          x, y, r_mean, theta_mid * 180.0 / M_PI,
-          cluster_size, expected_pts,
-          static_cast<double>(r_max_val - r_min));
-      }
-
-      i = cluster_end + 2;
-    } else {
-      i = has_trailing ? (cluster_end + 2) : (cluster_end + 1);
+    if (!too_close) {
+      detections.push_back({cx, cy});
     }
   }
 
@@ -200,7 +183,7 @@ std::vector<Detection> PillarDetectorNode::detectInFrame(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 聚类：将多帧累积候选点合并，按票数排序，最多保留 max_pillars_ 个
+// 多帧聚类
 // ─────────────────────────────────────────────────────────────────────────────
 std::vector<Cluster> PillarDetectorNode::clusterDetections(
   const std::vector<Detection> & dets) const
@@ -212,8 +195,6 @@ std::vector<Cluster> PillarDetectorNode::clusterDetections(
   for (int i = 0; i < nd; ++i) {
     if (labels[i] >= 0) { continue; }
     labels[i] = next_label;
-
-    // BFS：把距当前簇内任意点 < merge_dist 的点归入同簇
     bool changed = true;
     while (changed) {
       changed = false;
@@ -234,31 +215,23 @@ std::vector<Cluster> PillarDetectorNode::clusterDetections(
     ++next_label;
   }
 
-  // 计算每个簇的质心和票数
   std::vector<Cluster> clusters;
   for (int lbl = 0; lbl < next_label; ++lbl) {
     double sum_x = 0.0, sum_y = 0.0;
     int count = 0;
     for (int i = 0; i < nd; ++i) {
-      if (labels[i] == lbl) {
-        sum_x += dets[i].x_m;
-        sum_y += dets[i].y_m;
-        ++count;
-      }
+      if (labels[i] == lbl) { sum_x += dets[i].x_m; sum_y += dets[i].y_m; ++count; }
     }
     if (count >= min_votes_) {
       clusters.push_back({sum_x / count, sum_y / count, count});
     }
   }
 
-  // 按票数降序排列，最多保留 max_pillars_ 个
   std::sort(clusters.begin(), clusters.end(),
     [](const Cluster & a, const Cluster & b) { return a.votes > b.votes; });
-
   if (static_cast<int>(clusters.size()) > max_pillars_) {
     clusters.resize(max_pillars_);
   }
-
   return clusters;
 }
 
@@ -285,7 +258,7 @@ void PillarDetectorNode::publishPillars(const std::vector<Cluster> & pillars)
       pillars[k].x_m, pillars[k].x_m * 100.0);
     RCLCPP_INFO(get_logger(), "║    y = %+.3f m  ( 右方 %.1f cm )       ║",
       pillars[k].y_m, -pillars[k].y_m * 100.0);
-    RCLCPP_INFO(get_logger(), "║    置信度: %d/%d 帧检测到               ║",
+    RCLCPP_INFO(get_logger(), "║    检测次数: %d / %d 帧                 ║",
       pillars[k].votes, accumulation_frames_);
     if (k + 1 < pillars.size()) {
       RCLCPP_INFO(get_logger(), "╠══════════════════════════════════════════╣");
@@ -306,30 +279,23 @@ void PillarDetectorNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedP
   std::lock_guard<std::mutex> lock(mutex_);
   if (done_) { return; }
 
-  // 第一帧时预计算地图边界距离表
-  if (!ranges_precomputed_) {
-    precomputeMaxRanges(*msg);
-  }
+  if (!ranges_precomputed_) { precomputeMaxRanges(*msg); }
 
   const auto frame_dets = detectInFrame(*msg);
   ++frame_count_;
 
-  for (const auto & d : frame_dets) {
-    accumulated_.push_back(d);
-  }
+  for (const auto & d : frame_dets) { accumulated_.push_back(d); }
 
   RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
     "帧 %d/%d  本帧候选=%zu  累积=%zu",
-    frame_count_, accumulation_frames_,
-    frame_dets.size(), accumulated_.size());
+    frame_count_, accumulation_frames_, frame_dets.size(), accumulated_.size());
 
   if (frame_count_ >= accumulation_frames_) {
     done_ = true;
     RCLCPP_INFO(get_logger(),
       "累积完成（%d 帧，%zu 个候选点），开始聚类...",
       frame_count_, accumulated_.size());
-    const auto pillars = clusterDetections(accumulated_);
-    publishPillars(pillars);
+    publishPillars(clusterDetections(accumulated_));
   }
 }
 
