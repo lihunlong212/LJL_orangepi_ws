@@ -106,6 +106,7 @@ bool UartToStm32::initialize(double update_rate, const std::string & source_fram
 
     has_st_ready_pub_ = false;
 
+    
     serial_comm_->start_protocol_receive(
       [this](uint8_t id, const std::vector<uint8_t> & data) { protocolDataHandler(id, data); },
       [this](const std::string & err) {
